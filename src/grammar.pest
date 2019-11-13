@@ -1,0 +1,40 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
+
+reserved = _{ "struct" | "fn" }
+int = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
+real = @{ ("+" | "-")? ~ (ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* | ASCII_DIGIT* ~ "." ~ ASCII_DIGIT+) }
+ident = @{ !reserved ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHA | "_" | "-" )* }
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+term = _{ "(" ~ expr ~ ")" | fn_call | real | int | ident | string }
+infix_expr = { term ~ (infix_op ~ term | dot ~ ident)* }
+infix_op = _{ add | sub | mul | div }
+    add = { "+" }
+    sub = { "-" }
+    mul = { "*" }
+    div = { "/" }
+    dot = { "." }
+
+generic_args = { "<" ~ (type_expr ~ ",")* ~ type_expr? ~ ">" }
+type_expr = { ident ~ generic_args? }
+
+fn_call = { ident ~ "(" ~ ((kwarg | arg) ~ ",")* ~ (kwarg | arg)? ~ ")" }
+arg = { expr }
+kwarg = { ident ~ "=" ~ expr }
+
+expr = _{ infix_expr }
+
+assignment_annotated = { ident ~ ":" ~ type_expr ~ "=" ~ expr }
+assignment_inferred = { ident ~ "=" ~ expr }
+
+struct_dec = { "struct" ~ ident ~ "{" ~ (ident ~ ":" ~ type_expr ~ ("=" ~ expr)? ~ ";")* ~ "}" }
+
+statement = !{
+      assignment_annotated
+    | assignment_inferred
+    | struct_dec
+    | expr ~ ";"
+}
+line = ${ statement ~ ("\r\n" | "\n" | ";" | EOI) }
+source = _{ SOI ~ line* ~ EOI }
