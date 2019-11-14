@@ -1,19 +1,22 @@
-#[macro_use] extern crate pest;
+extern crate pest;
 #[macro_use] extern crate pest_derive;
 #[macro_use] extern crate fstrings;
 
-use crate::mir::{MirInstr, Loc, MirReadable};
 use crate::symbols::SymbolTable;
 use std::fs;
-use std::error::Error;
 use crate::codegen::{Program};
 use crate::mirgen::create_mir_instrs;
+use crate::type_inference::{type_check, Type};
+use crate::ast::Ident;
+use crate::functions::FnType;
 
 
 mod util;
 mod error;
+mod functions;
 mod parse;
 mod ast;
+mod type_inference;
 mod symbols;
 mod mirgen;
 mod mir;
@@ -52,13 +55,33 @@ fn main() {
 
     println!("{:#?}", ast_nodes);
 
-    let mut symbol_table = match SymbolTable::scan_symbols(&ast_nodes) {
-        Ok(symbol_table) => symbol_table,
+    let mut symbol_table = SymbolTable::scan_symbols(&ast_nodes);
+    let add = Ident("add".to_string());
+    symbol_table.bind(&add);
+    symbol_table.get_type_entry(&add)
+        .or_insert(Type::Fn(FnType{
+            in_types: vec![Type::Int, Type::Int],
+            out_type: Box::new(Type::Int)
+        }));
+    let print = Ident("print".to_string());
+    symbol_table.bind(&print);
+    symbol_table.get_type_entry(&print)
+        .or_insert(Type::Fn(FnType{
+            in_types: vec![Type::Int],
+            out_type: Box::new(Type::Void)
+        }));
+
+    println!("{:#?}", symbol_table);
+
+    match type_check(&ast_nodes, &mut symbol_table) {
+        Ok(_) => {}, // no error
         Err(err) => {
             eprintln!("{}", err);
-            return
+            return;
         }
-    };
+    }
+
+
 
 
 

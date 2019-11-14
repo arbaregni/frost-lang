@@ -1,6 +1,7 @@
 use pest;
 use crate::parse;
 use std::fmt::{Formatter, Error};
+use crate::type_inference::Type;
 
 type Pair<'a> = pest::iterators::Pair<'a, parse::Rule>;
 
@@ -19,31 +20,15 @@ impl std::fmt::Display for Ident {
 }
 
 #[derive(Debug)]
-pub struct TypeExpr {
-    name: Ident,
-    generics: Vec<TypeExpr>
-}
-
-impl From<Pair<'_>> for TypeExpr {
-    fn from(pair: Pair<'_>) -> Self {
-        assert_eq!(parse::Rule::type_expr, parse::Rule::ident);
-        let mut pairs = pair.into_inner();
-        let name = Ident::from(pairs.next().expect("type expr missing name"));
-        let mut generics = vec![];
-        TypeExpr { name, generics }
-    }
-}
-#[derive(Debug)]
 pub enum Ast {
     Int(i32),
     Real(f32),
     String(String),
     Ident(Ident),
-    Infix(String, Box<Ast>, Box<Ast>),
-    FnCall{func: Ident, args: Vec<Ast>, kwargs: Vec<(Ident, Ast)>},
-    TypeExpr(TypeExpr),
-    Assign{lhs: Ident, opt_type: Option<TypeExpr>, rhs: Box<Ast>},
-    StructDec(Ident, Vec<(Ident, TypeExpr)>)
+    FnCall{func: Ident, args: Vec<Ast> },
+    TypeExpr(Type),
+    Assign{ident: Ident, opt_type: Option<Type>, rhs: Box<Ast>},
+    StructDec(Ident, Vec<(Ident, Type)>)
 }
 
 impl Ast {

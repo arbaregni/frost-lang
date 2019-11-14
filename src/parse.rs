@@ -1,12 +1,11 @@
 
 use pest::Parser;
-use pest::RuleType;
 use pest::prec_climber::{PrecClimber, Operator, Assoc};
 use pest::iterators::Pair;
-use crate::ast::{Ast, Ident, TypeExpr};
+use crate::ast::{Ast, Ident};
 use pest::error::Error;
-use pest::*;
 use crate::util::Tuples;
+use crate::type_inference::Type;
 
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
@@ -24,6 +23,17 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, Error<Rule>> {
     Ok(ast_nodes)
 }
 
+fn parse_type(pair: Pair<Rule>) -> Type {
+    assert_eq!(pair.as_rule(), Rule::type_expr);
+    let mut pairs = pair.into_inner();
+    let name = Ident::from(pairs.next().expect("type expr missing name"));
+    match name.0.as_str() {
+        "Void" => Type::Void,
+        "Int" => Type::Int,
+        "Real" => Type::Real,
+        _ => unimplemented!()
+    }
+}
 
 fn parse_pair(pair: Pair<Rule>) -> Ast {
     let climber = PrecClimber::new(vec![
@@ -35,12 +45,17 @@ fn parse_pair(pair: Pair<Rule>) -> Ast {
     match pair.as_rule() {
         Rule::line | Rule::statement => parse_pair(pair.into_inner().nth(0).expect("no token inside line or statement")),
         Rule::int =>    Ast::parse_int(pair),
+        Rule::real =>    Ast::parse_real(pair),
         Rule::ident =>  Ast::Ident(Ident::from(pair)),
         Rule::string => Ast::String(pair.as_str().to_string()),
        // Rule::type_expr => Ast::TypeExpr,
         Rule::infix_expr => {
             climber.climb(pair.into_inner(), parse_pair, |lhs, op, rhs| {
-                Ast::Infix(op.as_str().to_string(), Box::new(lhs), Box::new(rhs))
+                let builtin = match op.as_str() {
+                    "+" => Ident(format!("add")),
+                    _ => panic!("Invalid operator {}", op),
+                };
+                Ast::FnCall { func: builtin, args: vec![lhs, rhs] }
             })
         }
         Rule::fn_call => {
@@ -62,12 +77,12 @@ fn parse_pair(pair: Pair<Rule>) -> Ast {
                     _ => unreachable!()
                 }
             }
-            Ast::FnCall{ func, args, kwargs }
+            Ast::FnCall{ func, args }
         }
         Rule::assignment_inferred => {
             let mut pairs = pair.into_inner();
             Ast::Assign{
-                lhs: Ident::from(pairs.next().expect("missing lhs of assignment")),
+                ident: Ident::from(pairs.next().expect("missing lhs of assignment")),
                 opt_type: None,
                 rhs: Box::new(parse_pair(pairs.next().expect("missing rhs of assignment"))),
             }
@@ -75,8 +90,8 @@ fn parse_pair(pair: Pair<Rule>) -> Ast {
         Rule::assignment_annotated => {
             let mut pairs = pair.into_inner();
             Ast::Assign{
-                lhs: Ident::from(pairs.next().expect("missing lhs of assignment")),
-                opt_type: Some(TypeExpr::from(pairs.next().expect("missing type of assignment"))),
+                ident: Ident::from(pairs.next().expect("missing lhs of assignment")),
+                opt_type: None, // todo parse type expressions
                 rhs: parse_pair(pairs.nth(0).expect("missing rhs of assignment")).into_boxed(),
             }
         }
@@ -85,7 +100,7 @@ fn parse_pair(pair: Pair<Rule>) -> Ast {
             let mut iter = pair.into_inner();
             let name = Ident::from(iter.next().expect("struct missing name"));
             for (arg, typ) in crate::util::Tuples::new(iter) {
-                members.push((Ident::from(arg), TypeExpr::from(typ)));
+                members.push((Ident::from(arg), parse_type(typ)));
             }
             Ast::StructDec(name, members)
         }
