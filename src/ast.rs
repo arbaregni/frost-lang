@@ -1,44 +1,102 @@
 use pest;
 use crate::parse;
-use std::fmt::{Formatter, Error};
 use crate::type_inference::Type;
+use crate::functions::FunDec;
+use crate::scope::ScopeId;
+use std::fmt::{Formatter, Error};
+use std::rc::Rc;
+use std::cell::RefCell;
 
 type Pair<'a> = pest::iterators::Pair<'a, parse::Rule>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Ident(pub String);
-impl From<Pair<'_>> for Ident {
-    fn from(pair: Pair<'_>) -> Self {
-        assert_eq!(parse::Rule::ident, pair.as_rule());
-        Ident(pair.as_str().to_string())
-    }
+pub struct Ident {
+    pub name: String,
+    pub scope_id: usize,
 }
-impl std::fmt::Display for Ident {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        write!(f, "ident({})", self.0)
+impl Ident {
+    pub fn new(name: String, scope_id: usize) -> Self {
+        Ident { name, scope_id }
     }
 }
 
-#[derive(Debug)]
-pub enum Ast {
+impl std::fmt::Display for Ident {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{}#{}", self.name, self.scope_id)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AstBlock(pub Vec<Ast>);
+
+impl AstBlock {
+    pub fn empty() -> AstBlock { AstBlock(Vec::new()) }
+}
+impl std::convert::From<Vec<Ast>> for AstBlock {
+    fn from(nodes: Vec<Ast>) -> AstBlock {
+        AstBlock(nodes)
+    }
+}
+impl std::convert::Into<AstKind> for AstBlock {
+    fn into(self) -> AstKind {
+        AstKind::Block(self)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AstKind {
     Int(i32),
     Real(f32),
+    Boole(bool),
     String(String),
-    Ident(Ident),
-    FnCall{func: Ident, args: Vec<Ast> },
+    Ident(String),
     TypeExpr(Type),
-    Assign{ident: Ident, opt_type: Option<Type>, rhs: Box<Ast>},
-    StructDec(Ident, Vec<(Ident, Type)>)
+    Block(AstBlock),
+    IfStmnt {test: Box<Ast>, if_branch: Box<Ast>, else_branch: Option<Box<Ast>>},
+    FunCall {func: String, args: Vec<Ast> },
+    Assign {ident: String, opt_type: Option<Type>, rhs: Box<Ast>},
+    StructDec {ident: String, fields: Vec<(String, Type)>},
+    FunDec{ident: String, fun_dec: Rc<FunDec> },
+}
+
+#[derive(Debug, Clone)]
+pub struct Ast {
+    pub kind: AstKind,
+    pub span: parse::Span,
+    pub scope_id: ScopeId,
 }
 
 impl Ast {
-    pub fn parse_int(pair: Pair<'_>) -> Ast {
-        Ast::Int(pair.as_str().parse::<i32>().expect("Ast parse_int failed"))
-    }
-    pub fn parse_real(pair: Pair<'_>) -> Ast {
-        Ast::Real(pair.as_str().parse::<f32>().expect("Ast parse_real failed"))
-    }
     pub fn into_boxed(self) -> Box<Ast> {
         Box::new(self)
+    }
+}
+
+impl AstKind {
+    pub fn at_pair(self, pair: &Pair<'_>) -> Ast {
+        Ast {
+            kind: self,
+            scope_id: ScopeId::default(),
+            span: parse::Span::new(pair.as_span().start(), pair.as_span().end()),
+        }
+    }
+    pub fn parse_int(pair: Pair<'_>) -> AstKind {
+        let data = pair.as_str().parse::<i32>().expect("Ast parse_int failed");
+        AstKind::Int(data)
+    }
+    pub fn parse_real(pair: Pair<'_>) -> AstKind {
+        let data = pair.as_str().parse::<f32>().expect("Ast parse_real failed");
+        AstKind::Real(data)
+    }
+    pub fn parse_boole(pair: Pair<'_>) -> AstKind {
+        let data = pair.as_str().parse::<bool>().expect("Ast parse_boole failed");
+        AstKind::Boole(data)
+    }
+    pub fn parse_string(pair: Pair<'_>) -> AstKind {
+        let data = pair.as_str().to_string();
+        AstKind::String(data)
+    }
+    pub fn parse_ident(pair: Pair<'_>) -> AstKind {
+        AstKind::Ident(pair.as_str().to_string())
     }
 }

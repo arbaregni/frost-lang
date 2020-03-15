@@ -1,18 +1,22 @@
 use std::collections::HashMap;
-use crate::error::Error;
+use crate::error::{Error, ErrorKind, ResultExtension};
 use std::fmt::Formatter;
-use crate::ast::{Ast, Ident};
-use crate::symbols::SymbolTable;
-use crate::functions::FnType;
+use crate::ast::{Ast, AstKind, AstBlock};
+use crate::symbols::{SymbolTable};
+use crate::functions::{FunType};
 use std::collections::hash_map::Entry;
+use std::ops::Deref;
+use crate::scope::ScopeId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Void,
     Int,
     Real,
+    Boole,
+    String,
     Type,
-    Fn(FnType),
+    Fn(FunType),
     // type variable, used in inference
     Variable(String),
 }
@@ -22,8 +26,10 @@ impl std::fmt::Display for Type {
             Type::Void => write!(f, "Void"),
             Type::Int => write!(f, "Int"),
             Type::Real => write!(f, "Real"),
+            Type::Boole => write!(f, "Boole"),
+            Type::String => write!(f, "String"),
             Type::Type => write!(f, "Type"),
-            Type::Fn(FnType{ ref in_types, ref out_type }) => {
+            Type::Fn(FunType { ref in_types, ref out_type }) => {
                 let in_types = in_types.iter().map(|type_| format!("{}", type_)).collect::<Vec<String>>().join(", ");
                 write!(f, "Fn({}) -> {}", in_types, out_type)
             }
@@ -35,8 +41,8 @@ impl Type {
     /// recursively search for the name
     fn contains_var(&self, name: &str) -> bool {
         match *self {
-            Type::Void | Type::Int | Type::Real | Type::Type => false,
-            Type::Fn(FnType{ ref in_types, ref out_type }) => {
+            Type::Void | Type::Int | Type::Real | Type::Boole | Type::String | Type::Type => false,
+            Type::Fn(FunType { ref in_types, ref out_type }) => {
                 for in_type in in_types.iter() {
                     if in_type.contains_var(name) {
                         return true;
@@ -50,9 +56,9 @@ impl Type {
     /// perform the substitution recursively
     fn substitute(&self, sub: &Substitution) -> Type {
         match self {
-            Type::Void | Type::Int | Type::Real | Type::Type => self.clone(),
-            Type::Fn(FnType{ ref in_types, ref out_type }) => {
-                FnType {
+            Type::Void | Type::Int | Type::Real | Type::Boole | Type::String | Type::Type => self.clone(),
+            Type::Fn(FunType { ref in_types, ref out_type }) => {
+                FunType {
                     in_types: in_types.iter().map(|t| t.substitute(sub)).collect(),
                     out_type: Box::new(out_type.substitute(sub))
                 }.into()
@@ -61,6 +67,29 @@ impl Type {
         }
     }
 }
+#[derive(Debug, Clone)]
+pub struct Quantified {
+    pub type_: Type,
+    pub variables: Vec<String>,
+}
+impl Quantified {
+    fn get_instantiation(ident: &str, scope_id: ScopeId, symbols: &mut SymbolTable, ctx: &mut Context) -> Type {
+        match symbols.quant_entry(ident, scope_id) {
+            Entry::Occupied(occupied) => occupied.get().instantiate(ctx),
+            Entry::Vacant(_) => panic!("Quantified is vacant"),
+        }
+    }
+    fn instantiate(&self, ctx: &mut Context) -> Type {
+        let sub = Substitution::from_bound_variables(&self.variables, ctx);
+        self.type_.substitute(&sub)
+    }
+}
+impl std::fmt::Display for Quantified {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "forall {}. {}", self.variables.join(", "), self.type_)
+    }
+}
+
 struct Context {
     idx: usize,
 }
@@ -78,6 +107,13 @@ struct Substitution {
 }
 impl Substitution {
     fn empty() -> Substitution { Substitution { map: HashMap::new() } }
+    fn from_bound_variables(variables: &[String], ctx: &mut Context) -> Substitution {
+        let mut map = HashMap::new();
+        for var_name in variables.iter() {
+            map.insert(var_name.clone(), ctx.make_type_variable());
+        }
+        Substitution{map}
+    }
     /// make the substitution from the type variable name to the concrete type
     fn make(var_name: &String, type_: &Type) -> Result<Substitution, Error> {
         if let Type::Variable(v) = type_ {
@@ -86,13 +122,13 @@ impl Substitution {
             }
         }
         if type_.contains_var(var_name) {
-            return Error::inference(f!("type {type_} contains a reference to itself")).into();
+            return ErrorKind::SelfReferentialType{type_: type_.clone()}.into_result();
         }
         let mut map = HashMap::new();
         map.insert(var_name.clone(), type_.clone());
         Ok(Substitution{map})
     }
-    /// Apply `self` to the given substitution, and return
+    /// Apply `self` to the given substitution, and return the composition
     fn compose(self, other: Substitution) -> Substitution {
         let mut result = HashMap::new();
         for (id, type_) in self.map.iter() {
@@ -115,11 +151,11 @@ impl Substitution {
 /// Construct the substitution which will make these types compatible
     /// Note: this is not symmetric
     ///       t1 is the 'expected' type, t2 is the 'found' type
-fn unify(expected: &Type, found: &Type) -> Result<Substitution, Error> {
+fn unify(expected: &Type, actual: &Type) -> Result<Substitution, Error> {
     // println!("unifying `{}`  &  `{}`...", t1, t2);
-    match (expected, found) {
+    match (expected, actual) {
         // if either is a variable, attempt to substitute it with the other
-        (Type::Variable(ref name), _) => Substitution::make(name, found),
+        (Type::Variable(ref name), _) => Substitution::make(name, actual),
         (_, Type::Variable(ref name)) => Substitution::make(name, expected),
 
         (Type::Fn(expect_fn), Type::Fn(found_fn)) => {
@@ -129,8 +165,11 @@ fn unify(expected: &Type, found: &Type) -> Result<Substitution, Error> {
             unify(&expected_out, &found_out)
         }
         // otherwise, the types must match exactly
-        (_, _) if *expected == *found => Ok(Substitution::empty()),
-        _ => Error::inference(f!("type mismatch: expected `{expected}`, found `{found}`")).into()
+        (_, _) if *expected == *actual => Ok(Substitution::empty()),
+        _ => ErrorKind::TypeMismatch{
+            expected_type: expected.clone(),
+            actual_type: actual.clone(),
+        }.into_result()
     }
 }
 /// Perform unification on each type in turn, returning the composition
@@ -146,17 +185,38 @@ fn unify_many(types1: &[Type], types2: &[Type]) -> Result<Substitution, Error> {
 
 impl Ast {
     fn infer_type(&self, symbols: &mut SymbolTable, ctx: &mut Context) -> Result<(Type, Substitution), Error> {
-        match *self {
-            Ast::Int(_) => Ok((Type::Int, Substitution::empty())),
-            Ast::Real(_) => Ok((Type::Real, Substitution::empty())),
-            Ast::TypeExpr(_) => Ok((Type::Type, Substitution::empty())),
-            Ast::String(_) => unimplemented!(),
-            Ast::Ident(ref name) => if let Some(type_) = symbols.get_type(name) {
+        match self.kind {
+            AstKind::Int(_) => Ok((Type::Int, Substitution::empty())),
+            AstKind::Real(_) => Ok((Type::Real, Substitution::empty())),
+            AstKind::Boole(_) => Ok((Type::Boole, Substitution::empty())),
+            AstKind::TypeExpr(_) => Ok((Type::Type, Substitution::empty())),
+            AstKind::String(_) => Ok((Type::String, Substitution::empty())),
+            AstKind::Ident(ref name) => if let Some(type_) = symbols.get_type(name, self.scope_id) {
                 Ok((type_.clone(), Substitution::empty()))
             } else {
-                Error::inference(f!("identifier `{name}` is not defined in the current environment")).into()
+                ErrorKind::UndefinedSymbol{name: name.clone(), scope_id: self.scope_id}
+                    .into_result()
+                    .with_span(self.span)
             },
-            Ast::FnCall { ref func, ref args } => {
+            AstKind::Block(ref statements) => statements.infer_type(symbols, ctx),
+            AstKind::IfStmnt { ref test, ref if_branch, ref else_branch } => {
+                let (test_type, mut sub) = test.infer_type(symbols, ctx)?;
+                sub = sub.compose(unify(&Type::Boole, &test_type).with_span(self.span)? );
+                let out_type = ctx.make_type_variable();
+                let (if_branch_type, sub1) = if_branch.infer_type(symbols, ctx)?;
+                sub = sub.compose(sub1).compose(unify(&out_type, &if_branch_type).with_span(self.span)?);
+                let else_branch_type = if let Some(branch) = else_branch {
+                    let (else_branch_type, sub1) = branch.infer_type(symbols, ctx)?;
+                    sub = sub.compose(sub1);
+                    else_branch_type
+                } else {
+                    Type::Void
+                };
+                let out_type = out_type.substitute(&sub);
+                sub = sub.compose(unify(&out_type, &else_branch_type).with_span(self.span)?);
+                Ok((out_type.substitute(&sub), sub))
+            }
+            AstKind::FunCall { ref func, ref args } => {
                 // infer the types for the given arguments
                 let mut sub0 = Substitution::empty();
                 let mut in_types = vec![];
@@ -169,15 +229,23 @@ impl Ast {
                 let out_type = ctx.make_type_variable();
 
                 // attempt to unify these with what the function is defined to be
-                let fn_as_defined = symbols.get_type(func).expect("unbound function");
-                let sub1 = unify(fn_as_defined, &FnType{
+                let fn_as_defined = symbols.get_fun(func, self.scope_id)
+                                           .ok_or(ErrorKind::UndefinedSymbol{
+                                               name: func.to_string(),
+                                               scope_id: self.scope_id,
+                                              }.into_error()
+                                               .with_span(self.span)
+                                           )?
+                                           .fun_type.clone().into();
+
+                let sub1 = unify(&fn_as_defined, &FunType {
                     in_types: in_types.clone(),
                     out_type: Box::new(out_type.clone()),
-                }.into())?;
+                }.into()).with_span(self.span)?;
 
                 let fn_type = match fn_as_defined.substitute(&sub1) {
                     Type::Fn(fn_type) => fn_type,
-                    _ => panic!("fn got subsitited for something other than a function"),
+                    _ => panic!("fn got substituted for something other than a function"),
                 };
 
                 let sub2 = sub0.compose(sub1);
@@ -192,21 +260,45 @@ impl Ast {
 
                 Ok((out_type.substitute(&sub4), sub4))
             },
-            Ast::Assign{ ref ident, ref opt_type, ref rhs } => {
+            AstKind::Assign{ ref ident, ref opt_type, ref rhs } => {
                 let (type_, mut sub) = rhs.infer_type(symbols, ctx)?;
                 if let Some(expected_type) = opt_type {
-                    sub = sub.compose(unify(expected_type, &type_)?);
+                    sub = sub.compose(unify(expected_type, &type_).with_span(self.span)?);
                 }
-                // todo our scope should have the modification where lhs is bound
-                update_type(ident, symbols, type_)?;
+                // modify the type in the RHS, where it is bound
+                update_type(ident, rhs.scope_id, symbols, type_)?;
                 Ok((Type::Void, sub))
             },
-            Ast::StructDec(_, _) => Ok((Type::Void, Substitution::empty())),
+            AstKind::FunDec{ ident: _, ref fun_dec } => {
+                let scope_id = fun_dec.scope_id();
+                let param_iter = fun_dec.params.iter();
+                let in_types_iter = fun_dec.fun_type.in_types.iter();
+                for (param_name, param_type) in param_iter.zip(in_types_iter) {
+                    update_type(param_name, scope_id, symbols, param_type.clone())?;
+                }
+                let (out_type, sub0) = fun_dec.body.borrow_mut().infer_type(symbols, ctx)?;
+                let maybe_span = fun_dec.body.borrow().0.last().map(|n| n.span);
+                let sub1 = unify(fun_dec.fun_type.out_type.deref(), &out_type).with_maybe_span(maybe_span)?;
+                Ok((Type::Void, sub0.compose(sub1)))
+            }
+            AstKind::StructDec {..} => Ok((Type::Void, Substitution::empty())),
         }
     }
 }
-fn update_type(ident: &Ident, symbols: &mut SymbolTable, expected_type: Type) -> Result<(), Error> {
-    match symbols.get_type_entry(ident) {
+
+impl AstBlock {
+    fn infer_type(&self, symbols: &mut SymbolTable, ctx: &mut Context) -> Result<(Type, Substitution), Error> {
+        let mut to_return = (Type::Void, Substitution::empty());
+        for statement in self.0.iter() {
+            to_return = statement.infer_type(symbols, ctx)?;
+        }
+        Ok(to_return)
+    }
+}
+
+/// ensure that the type of a given variable is correct
+fn update_type(ident: &str, scope_id: ScopeId, symbols: &mut SymbolTable, expected_type: Type) -> Result<(), Error> {
+    match symbols.type_entry(ident, scope_id) {
         Entry::Occupied(mut occupied) => {
             let sub = unify(&expected_type, occupied.get())?;
             occupied.insert(occupied.get().substitute(&sub));

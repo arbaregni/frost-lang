@@ -1,13 +1,18 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
 
-reserved = _{ "struct" | "fn" }
+reserved = _{
+         "struct" | "fun" | "if" | "true" | "false" | "match"
+       | "for" | "while" | "return"
+}
+
+boole = @{ "true" | "false" }
 int = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
 real = @{ ("+" | "-")? ~ (ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT* | ASCII_DIGIT* ~ "." ~ ASCII_DIGIT+) }
 ident = @{ !reserved ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHA | "_" | "-" )* }
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
-term = _{ "(" ~ expr ~ ")" | fn_call | real | int | ident | string }
+term = _{ "(" ~ expr ~ ")" | fn_call | real | int | boole | ident | string }
 infix_expr = { term ~ (infix_op ~ term | dot ~ ident)* }
 infix_op = _{ add | sub | mul | div }
     add = { "+" }
@@ -19,22 +24,30 @@ infix_op = _{ add | sub | mul | div }
 generic_args = { "<" ~ (type_expr ~ ",")* ~ type_expr? ~ ">" }
 type_expr = { ident ~ generic_args? }
 
-fn_call = { ident ~ "(" ~ ((kwarg | arg) ~ ",")* ~ (kwarg | arg)? ~ ")" }
+fn_call = { ident ~ "(" ~ ((arg) ~ ",")* ~ (arg)? ~ ")" }
 arg = { expr }
-kwarg = { ident ~ "=" ~ expr }
 
-expr = _{ infix_expr }
+expr = _{ infix_expr | block }
 
 assignment_annotated = { ident ~ ":" ~ type_expr ~ "=" ~ expr }
 assignment_inferred = { ident ~ "=" ~ expr }
 
+block = { "{" ~ "}" | "{" ~ statement* ~ expr? ~ "}" }
+
 struct_dec = { "struct" ~ ident ~ "{" ~ (ident ~ ":" ~ type_expr ~ ("=" ~ expr)? ~ ";")* ~ "}" }
 
+fun_param = { ident ~ ":" ~ type_expr }
+fun_dec = { "fun" ~ ident ~ "(" ~ (fun_param ~ ",")* ~ fun_param? ~ ")" ~ (":" ~ type_expr)? ~ block }
+
+if_stmnt = { "if" ~ expr ~ block ~ ("else" ~ (if_stmnt | block))? }
+
 statement = !{
-      assignment_annotated
-    | assignment_inferred
+      if_stmnt
     | struct_dec
+    | fun_dec
+    | assignment_annotated ~ ";"
+    | assignment_inferred ~ ";"
     | expr ~ ";"
 }
-line = ${ statement ~ ("\r\n" | "\n" | ";" | EOI) }
-source = _{ SOI ~ line* ~ EOI }
+
+source = _{ SOI ~ statement* ~ EOI }
