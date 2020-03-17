@@ -1,5 +1,4 @@
 use crate::ast::Ast;
-use crate::mir;
 use crate::type_inference::{Type, Quantified};
 use crate::scope::{ScopeId, ScopeTable};
 use crate::functions::{FunDec};
@@ -7,9 +6,7 @@ use crate::functions::{FunDec};
 use std::fmt::Formatter;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::cell::RefCell;
 use std::rc::Rc;
-use std::ops::Deref;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolId(usize);
@@ -27,15 +24,10 @@ pub struct SymbolTable {
 
     type_table: HashMap<SymbolId, Type>,
 
-
     // ---- DECLARATIONS ----
     struct_table: HashMap<SymbolId, ()>,
     fun_table: HashMap<SymbolId, Rc<FunDec>>,
     quantified: HashMap<SymbolId, Quantified>,
-
-    // ---- ALPHA RENAMING ----
-    alpha_counter: usize,
-    val_table: HashMap<SymbolId, mir::Val>, // maps identifiers to their corresponding mir values
 }
 
 impl SymbolTable {
@@ -49,9 +41,6 @@ impl SymbolTable {
             fun_table: HashMap::new(),
 
             quantified: HashMap::new(),
-
-            alpha_counter: 0,
-            val_table: HashMap::new(),
         }
     }
     pub fn scan_symbols(ast_nodes: &mut [Ast]) -> SymbolTable {
@@ -86,7 +75,6 @@ impl SymbolTable {
     }
     pub fn get_type(&'_ self, ident: &str, scope_id: ScopeId) -> Option<&'_ Type> {
         let id = self.scope_table.get_id(ident, scope_id)?;
-        println!("looking for type of {}, type_table = {:#?}", id, self.type_table);
         self.type_table.get(id)
     }
     pub fn type_entry(&'_ mut self, ident: &str, scope_id: ScopeId) -> Entry<'_, SymbolId, Type> {
@@ -101,6 +89,9 @@ impl SymbolTable {
     }
     pub fn get_fun(&'_ self, name: &str, scope_id: ScopeId) -> Option<&'_ FunDec> {
         let symbol_id = self.scope_table.get_id(name, scope_id)?;
+        self.get_fun_by_id(symbol_id)
+    }
+    pub fn get_fun_by_id(&'_ self, symbol_id: &SymbolId) -> Option<&'_ FunDec> {
         let rc = self.fun_table.get(symbol_id)?;
         Some(rc.as_ref())
     }
@@ -128,23 +119,5 @@ impl SymbolTable {
         self.quantified.entry(id.clone())
     }
 
-    /// get the mir value associated with an identifier in the specified scope
-    pub fn alpha_rename(&mut self, name: &str, scope_id: ScopeId) -> mir::Val {
-        let id = self.scope_table.get_id(name, scope_id).expect(&f!("unbound symbol {name} in scope {scope_id}")).clone();
-        match self.val_table.entry(id) {
-            Entry::Occupied(ref entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let val = mir::Val::Varbl(self.alpha_counter);
-                entry.insert(val.clone());
-                self.alpha_counter += 1;
-                val
-            }
-        }
-    }
-    /// make an intermediate value
-    pub fn make_intermediate(&mut self) -> mir::Val {
-        let val = mir::Val::Varbl(self.alpha_counter);
-        self.alpha_counter += 1;
-        val
-    }
+
 }

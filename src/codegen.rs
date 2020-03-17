@@ -137,7 +137,7 @@ impl Program for MipsProgram {
                 self.set_reg("$a0", &val);
                 make_instr!(self, "syscall");
             }
-            Cond{test, invert, body} => {
+            /* Cond{test, invert, body} => {
                 match test {
                     Varbl(_) => {
                         // request a label to jump to on false
@@ -162,8 +162,8 @@ impl Program for MipsProgram {
                     }
                     Const(_) | Nothing => { /* no - op */ }
                 }
-            }
-            CallFun{dest, symbol_id, args} => {
+            } */
+            /* CallRtn {dest, symbol_id, args } => {
                 let mut idx = 0;
                 // save the things that need to be saved by the caller
                 for temp_reg in self.active_temp_regs.iter() {
@@ -186,7 +186,7 @@ impl Program for MipsProgram {
                 // recover return address
                 idx -= 1;
                 make_instr!(self, "lw", "$ra", idx, ( "$sp" ));
-            }
+            } */
             _ => {
                 println!("warning! unrecognized instr {:?}", instr);
             }
@@ -222,16 +222,7 @@ impl MipsProgram {
         make_instr!(self, prefix, &dest, &self.val_str(&value));
     }
     fn compile_subroutine(&mut self, symbol_id: SymbolId, fun_dec: &FunDec) {
-        // compile the actual body of the subroutine, using whatever registers we want to use
-        let mut subroutine = MipsProgram::new();
-        // lookup all the arguments for this subroutine
-        for param in fun_dec.params.iter() {
-            let symbol_id = 0;
-            dbg!( param );
-        }
-        for instr in fun_dec.mir().instrs.iter() {
-            subroutine.compile_instr(instr);
-        }
+        let subroutine = MipsProgram::new();
         // find our label and begin the block of the subroutine in the main file
         let lbl = &self.labels_by_symbol[&symbol_id];
         write_label!(self, lbl);
@@ -249,8 +240,6 @@ impl MipsProgram {
 
         // paste in the body of the subroutine
         self.text.push_str(&subroutine.text);
-
-        println!("returning: {:?}", self.val_str(&fun_dec.mir().returns));
 
         if idx != 0 {
             // move the stack pointer back up

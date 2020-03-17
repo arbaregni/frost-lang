@@ -205,15 +205,11 @@ impl Ast {
                 let out_type = ctx.make_type_variable();
                 let (if_branch_type, sub1) = if_branch.infer_type(symbols, ctx)?;
                 sub = sub.compose(sub1).compose(unify(&out_type, &if_branch_type).with_span(self.span)?);
-                let else_branch_type = if let Some(branch) = else_branch {
-                    let (else_branch_type, sub1) = branch.infer_type(symbols, ctx)?;
-                    sub = sub.compose(sub1);
-                    else_branch_type
-                } else {
-                    Type::Void
-                };
+                let (else_branch_type, sub2) = else_branch.infer_type(symbols, ctx)?;
+                sub = sub.compose(sub2);
                 let out_type = out_type.substitute(&sub);
                 sub = sub.compose(unify(&out_type, &else_branch_type).with_span(self.span)?);
+                //TODO we can insert a helpful error message here if the else branch doesn't exist and the if branch tries to return a value
                 Ok((out_type.substitute(&sub), sub))
             }
             AstKind::FunCall { ref func, ref args } => {

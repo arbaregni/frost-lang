@@ -7,7 +7,6 @@ use crate::type_inference::Type;
 use crate::functions::{FunType, FunDec};
 use crate::symbols::SymbolTable;
 use std::rc::Rc;
-use std::cell::RefCell;
 
 #[derive(Parser)]
 #[grammar = "grammar.pest"]
@@ -113,7 +112,10 @@ fn parse_pair(pair: Pair<Rule>, symbol_table: &mut SymbolTable) -> Ast {
             let mut pairs = pair.into_inner();
             let test = parse_pair(pairs.next().expect("if_stmnt missing test"), symbol_table).into_boxed();
             let if_branch = parse_pair(pairs.next().expect("if_stmnt missing body"), symbol_table).into_boxed();
-            let else_branch = pairs.next().map(|p| parse_pair(p, symbol_table).into_boxed());
+            let else_branch = match pairs.next() {
+                Some(pair) => parse_pair(pair, symbol_table),
+                None => Ast::new_nil(),
+            }.into_boxed();
             AstKind::IfStmnt { test, if_branch, else_branch }
         }
         Rule::fn_call => {

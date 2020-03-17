@@ -104,9 +104,7 @@ impl Ast {
             AstKind::IfStmnt { ref mut test, ref mut if_branch, ref mut else_branch } => {
                 test.scan_symbols(scope_id, top_level_id, symbols);
                 if_branch.scan_symbols(scope_id, top_level_id, symbols);
-                if let Some(branch) = else_branch {
-                    branch.scan_symbols(scope_id, top_level_id, symbols);
-                }
+                else_branch.scan_symbols(scope_id, top_level_id, symbols);
             }
             AstKind::Assign { ref ident, opt_type: _, ref mut rhs } => {
                 let subscope_id = symbols.scope_table.create_subscope(*scope_id);

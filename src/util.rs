@@ -1,11 +1,3 @@
-use crate::symbols::SymbolId;
-
-///  A custom enumeration to store declarations
-pub enum Dec<T> {
-    Owned(T),
-    InSymbolTable(SymbolId),
-}
-
 /// An iterator over consecutive tokens in a stream
 pub struct Tuples<I> where I: Iterator {
     iter: I

@@ -4,6 +4,7 @@ use crate::mir;
 use crate::scope::ScopeId;
 use std::cell::RefCell;
 use once_cell::unsync::OnceCell;
+use petgraph::graph::NodeIndex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunType {
@@ -23,8 +24,9 @@ pub struct FunDec {
     pub body: RefCell<AstBlock>,
     pub fun_type: FunType,
     maybe_scope_id: OnceCell<ScopeId>,
-    /// The internal representation of this function declaration
-    maybe_mir: OnceCell<MirSubroutine>,
+    /// The internal representation of this function declaration:
+    /// The index of the starting block, the ending block, and the return value
+    maybe_mir: OnceCell<SubroutineInfo>,
 }
 
 impl FunDec {
@@ -46,13 +48,11 @@ impl FunDec {
     pub fn scope_id(&self) -> ScopeId {
         *self.maybe_scope_id.get().expect("function missing its scope id")
     }
-    pub fn set_mir(&self, instrs: Vec<mir::Instr>, returns: mir::Val) {
-        println!("setting mir");
-        self.maybe_mir.set(MirSubroutine{instrs, returns}).expect("mir subroutine already set");
-        println!("here am I: {:?}", self);
+    pub fn maybe_mir(&self) -> Option<&SubroutineInfo> {
+        self.maybe_mir.get()
     }
-    pub fn mir(&self) -> &MirSubroutine {
-        self.maybe_mir.get().expect("function missing its mir subroutine")
+    pub fn set_mir(&self, subroutine_info: SubroutineInfo) {
+        self.maybe_mir.set(subroutine_info).expect("mir subroutine info is already set");
     }
     pub fn has_mir(&self) -> bool {
         self.maybe_mir.get().is_some()
@@ -61,7 +61,9 @@ impl FunDec {
 }
 
 #[derive(Debug, Clone)]
-pub struct MirSubroutine {
-    pub instrs: Vec<mir::Instr>,
-    pub returns: mir::Val,
+pub struct SubroutineInfo {
+    pub start: NodeIndex,
+    pub end: NodeIndex,
+    pub args: Vec<mir::Val>,
+    pub return_val: mir::Val,
 }

@@ -3,28 +3,9 @@ use crate::parse;
 use crate::type_inference::Type;
 use crate::functions::FunDec;
 use crate::scope::ScopeId;
-use std::fmt::{Formatter, Error};
 use std::rc::Rc;
-use std::cell::RefCell;
 
 type Pair<'a> = pest::iterators::Pair<'a, parse::Rule>;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Ident {
-    pub name: String,
-    pub scope_id: usize,
-}
-impl Ident {
-    pub fn new(name: String, scope_id: usize) -> Self {
-        Ident { name, scope_id }
-    }
-}
-
-impl std::fmt::Display for Ident {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        write!(f, "{}#{}", self.name, self.scope_id)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct AstBlock(pub Vec<Ast>);
@@ -52,7 +33,7 @@ pub enum AstKind {
     Ident(String),
     TypeExpr(Type),
     Block(AstBlock),
-    IfStmnt {test: Box<Ast>, if_branch: Box<Ast>, else_branch: Option<Box<Ast>>},
+    IfStmnt {test: Box<Ast>, if_branch: Box<Ast>, else_branch: Box<Ast>},
     FunCall {func: String, args: Vec<Ast> },
     Assign {ident: String, opt_type: Option<Type>, rhs: Box<Ast>},
     StructDec {ident: String, fields: Vec<(String, Type)>},
@@ -67,9 +48,17 @@ pub struct Ast {
 }
 
 impl Ast {
+    pub fn new_nil() -> Ast {
+        Ast {
+            kind: AstKind::Block(AstBlock::empty()),
+            span: parse::Span::new(0, 0),
+            scope_id: Default::default()
+        }
+    }
     pub fn into_boxed(self) -> Box<Ast> {
         Box::new(self)
     }
+
 }
 
 impl AstKind {
