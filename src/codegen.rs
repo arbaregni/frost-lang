@@ -1,26 +1,15 @@
 use crate::mir;
-use crate::mir::Val;
+use crate::mir::{Val, MirGraph, Mir, Instr};
 use crate::symbols::{SymbolId, SymbolTable};
 use std::collections::HashMap;
 use crate::functions::FunDec;
 use std::ops::Deref;
-
-pub fn compile<Target>(symbol_table: &mut SymbolTable, mut mir_instrs: Vec<mir::Instr>) -> String
-  where Target: Program
-{
-    let mut prgm = Target::new();
-    prgm.pre_process(symbol_table, &mut mir_instrs);
-    for instr in &mir_instrs {
-        prgm.compile_instr(instr);
-    }
-    prgm.post_process();
-    prgm.to_string()
-}
+use petgraph::graph::NodeIndex;
 
 pub trait Program {
     fn new() -> Self;
-    fn pre_process(&mut self, symbol_table: &mut SymbolTable, instrs: &mut [mir::Instr]);
-    fn compile_instr(&mut self, instr: &mir::Instr);
+    fn pre_process(&mut self, mir: &Mir, symbols: &SymbolTable);
+    fn compile_instr(&mut self, instr: &Instr, reg_alloc: &RegisterAllocation);
     fn post_process(&mut self);
     fn to_string(&self) -> String;
 }
@@ -67,24 +56,14 @@ impl Program for MipsProgram {
             text: String::new(),
         }
     }
-    fn pre_process(&mut self, symbol_table: &mut SymbolTable, _instrs: &mut [mir::Instr]) {
-        // compile all of the subroutines
-        for (symbol_id, fun_dec) in symbol_table.subroutine_iter() {
-            // create the label for this subroutine
-            let lbl = self.make_label();
-            // bind the label in the table so we can find it later on
-            self.labels_by_symbol.insert(symbol_id, lbl.clone());
-            // compile its mir instructions
-            self.compile_subroutine(symbol_id, fun_dec.deref());
-        }
-
+    fn pre_process(&mut self, mir: &Mir, symbols: &SymbolTable) {
         // prepare for the main function
         self.text.push_str("    .text\n    .globl main\n");
         write_label!(self, "main");
     }
-    fn compile_instr(&mut self, instr: &mir::Instr) {
-        use mir::Val::*;
-        use mir::Instr::*;
+    fn compile_instr(&mut self, instr: &Instr, reg_alloc: &RegisterAllocation) {
+        use Instr::*;
+        use Val::*;
         match instr {
             Add{dest, a, b} => {
                 match (a, b) {
@@ -124,7 +103,7 @@ impl Program for MipsProgram {
             }
             Equals{dest, a, b} => {
                 // first, take the difference of a and b, then we will negate it
-                self.compile_instr(&mir::Instr::Sub{dest: *dest, a: *a, b: *b});
+                self.compile_instr(&Instr::Sub{dest: *dest, a: *a, b: *b}, reg_alloc);
                 let valstr = self.val_str(&dest);
                 make_instr!(self, "nor",&valstr, &valstr, &valstr);
             }
@@ -221,34 +200,30 @@ impl MipsProgram {
         };
         make_instr!(self, prefix, &dest, &self.val_str(&value));
     }
-    fn compile_subroutine(&mut self, symbol_id: SymbolId, fun_dec: &FunDec) {
-        let subroutine = MipsProgram::new();
-        // find our label and begin the block of the subroutine in the main file
-        let lbl = &self.labels_by_symbol[&symbol_id];
-        write_label!(self, lbl);
+}
 
-        // of the registers that we used, save the ones that are supposed to be saved
-        let mut idx = 0;
-        for saved_reg in subroutine.active_save_regs.iter() {
-            make_instr!(self, "sw", saved_reg, idx, ( "$sp" ));
-            idx += 1;
+fn sort_blocks(mir: &Mir) -> Vec<NodeIndex> {
+    unimplemented!()
+}
+
+type RegisterAllocation = HashMap<(), ()>;
+fn reg_alloc(mir: &Mir, symbols: &SymbolTable) -> RegisterAllocation {
+    unimplemented!()
+}
+
+pub fn compile<Target>(mir: &Mir, symbols: &SymbolTable) -> String
+    where Target: Program
+{
+    let block_ordering = sort_blocks(mir);
+    let reg_alloc = reg_alloc(mir, symbols);
+    let mut prgm = Target::new();
+    prgm.pre_process(mir, symbols);
+    for block in block_ordering {
+        for instr in mir.graph[block].iter() {
+            prgm.compile_instr(instr, &reg_alloc);
         }
-        if idx != 0 {
-            // move the stack pointer down
-            make_instr!(self, "$sp", "$sp", -idx);
-        }
-
-        // paste in the body of the subroutine
-        self.text.push_str(&subroutine.text);
-
-        if idx != 0 {
-            // move the stack pointer back up
-            make_instr!(self, "addi", "$sp", "$sp", idx);
-        }
-
-        // return to the caller
-        make_instr!(self, "jr", "$ra");
-        self.text.push('\n');
     }
+    prgm.post_process();
+    prgm.to_string()
 }
 

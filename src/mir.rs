@@ -1,5 +1,5 @@
 use crate::symbols::SymbolId;
-use petgraph::graph::{Graph};
+use petgraph::graph::{Graph, NodeIndex};
 use petgraph::Directed;
 use std::fmt::{Formatter, Error};
 
@@ -70,6 +70,9 @@ impl MirBlock {
     pub fn push(&mut self, instr: Instr) {
         self.instrs.push(instr);
     }
+    pub fn iter(&self) -> impl Iterator<Item = &Instr> {
+        self.instrs.iter()
+    }
 }
 impl std::fmt::Display for MirBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
@@ -77,6 +80,11 @@ impl std::fmt::Display for MirBlock {
             writeln!(f, "{}", instr)?;
         }
         Ok(())
-
     }
+}
+
+pub struct Mir {
+    pub graph: MirGraph,         // the call flow graph
+    pub entry_block: NodeIndex, // the entry block of the program
+    pub exit_block: NodeIndex, // the exit block of the program
 }

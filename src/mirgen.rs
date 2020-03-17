@@ -1,5 +1,5 @@
 use crate::ast::{Ast, AstKind, AstBlock};
-use crate::mir::{Instr, Val, MirGraph, MirBlock, EdgeInfo};
+use crate::mir::{Instr, Val, MirGraph, MirBlock, EdgeInfo, Mir};
 use crate::symbols::{SymbolTable, SymbolId};
 use petgraph::graph::NodeIndex;
 use crate::scope::ScopeId;
@@ -170,12 +170,13 @@ fn find_or_create_subroutine<'a>(mir_graph: &mut MirGraph, symbol_id: &SymbolId,
     fun_dec.maybe_mir().unwrap()
 }
 
-pub fn create_mir_instrs(ast_nodes: &[Ast], symbols: &mut SymbolTable) -> MirGraph {
-    let mut mir_graph = MirGraph::new();
+pub fn create_mir(ast_nodes: &[Ast], symbols: &SymbolTable) -> Mir {
+    let mut graph = MirGraph::new();
     let mut renamer = AlphaRenamer::new();
-    let mut entry_block = mir_graph.add_node(MirBlock::new());
+    let entry_block = graph.add_node(MirBlock::new());
+    let mut exit_block = entry_block; // this will be the exit block after all the blocks are translated
     for node in ast_nodes {
-        node.generate_instr(&mut mir_graph, &mut entry_block, &mut renamer, symbols);
+        node.generate_instr(&mut graph, &mut exit_block, &mut renamer, symbols);
     }
-    mir_graph
+    Mir { graph, entry_block, exit_block }
 }

@@ -16,7 +16,7 @@ mod codegen;
 
 use std::fs;
 use crate::symbols::SymbolTable;
-use crate::mirgen::create_mir_instrs;
+use crate::mirgen::create_mir;
 use crate::type_inference::{type_check, Type};
 use crate::error::Error;
 use crate::scope::ScopeId;
@@ -84,10 +84,10 @@ fn compile(source: &str) -> Result<String, Error> {
 
     println!("lowering to mir....");
 
-    let mir_graph = create_mir_instrs(&ast_nodes, &mut symbol_table);
+    let mir = create_mir(&ast_nodes, &mut symbol_table);
 
     println!("{}", Dot::with_config(
-        &mir_graph,
+        &mir.graph,
         &[Config::EdgeNoLabel, ]
     ));
 
