@@ -203,7 +203,17 @@ impl MipsProgram {
 }
 
 fn sort_blocks(mir: &Mir) -> Vec<NodeIndex> {
-    unimplemented!()
+    // TODO getting better results out of this by using dominators
+    // for now, we'll just pick an arbitrary depth-first order
+    let mut result = Vec::with_capacity(mir.graph.node_count());
+    let mut todo = vec![mir.entry_block];
+    while let Some(node) = todo.pop() {
+        result.push(node);
+        for neighbor in mir.graph.neighbors(node) {
+            todo.push(neighbor);
+        }
+    }
+    result
 }
 
 type RegisterAllocation = HashMap<(), ()>;
