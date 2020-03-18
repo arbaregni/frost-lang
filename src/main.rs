@@ -84,7 +84,7 @@ fn compile(source: &str) -> Result<String, Error> {
 
     println!("lowering to mir....");
 
-    let mir = create_mir(&ast_nodes, &mut symbol_table);
+    let mir = create_mir(&ast_nodes, &symbol_table);
 
     println!("{}", Dot::with_config(
         &mir.graph,
@@ -93,7 +93,7 @@ fn compile(source: &str) -> Result<String, Error> {
 
 
 
-    let compiled = panic!("TODO: compile mir"); // codegen::compile::<codegen::MipsProgram>(&mut symbol_table, mir_instrs);
+    let compiled = codegen::compile::<codegen::MipsProgram>(&mir, &symbol_table);
 
     Ok(compiled)
 }

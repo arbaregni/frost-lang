@@ -1,7 +1,7 @@
 use crate::mir;
 use crate::mir::{Val, MirGraph, Mir, Instr};
 use crate::symbols::{SymbolId, SymbolTable};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::functions::FunDec;
 use std::ops::Deref;
 use petgraph::graph::NodeIndex;
@@ -207,9 +207,12 @@ fn sort_blocks(mir: &Mir) -> Vec<NodeIndex> {
     // for now, we'll just pick an arbitrary depth-first order
     let mut result = Vec::with_capacity(mir.graph.node_count());
     let mut todo = vec![mir.entry_block];
+    let mut visited = HashSet::new();
     while let Some(node) = todo.pop() {
         result.push(node);
+        visited.insert(node);
         for neighbor in mir.graph.neighbors(node) {
+            if visited.contains(&neighbor) { continue; }
             todo.push(neighbor);
         }
     }
@@ -225,6 +228,7 @@ pub fn compile<Target>(mir: &Mir, symbols: &SymbolTable) -> String
     where Target: Program
 {
     let block_ordering = sort_blocks(mir);
+    println!("ordering: {:?}", block_ordering);
     let reg_alloc = reg_alloc(mir, symbols);
     let mut prgm = Target::new();
     prgm.pre_process(mir, symbols);
