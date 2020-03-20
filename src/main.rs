@@ -96,10 +96,33 @@ fn compile(source: &str) -> Result<String, Error> {
     Ok(compiled)
 }
 
-fn main() {
-    let in_path = r"C:\Users\james\Projects\basic-transpilation-prime\test.txt";
-    let source = fs::read_to_string(in_path).expect("failed to read file");
+struct Args {
+    in_path: String,
+    out_path: String,
+}
 
+fn parse_args() -> Result<Args, String> {
+    // the defaults
+    let mut args = Args {
+        in_path: String::from(r"C:\Users\james\Projects\basic-transpilation-prime\test.txt"),
+        out_path: String::from(r"C:\Users\james\Projects\basic-transpilation-prime\test.s"),
+    };
+
+    Ok(args)
+}
+
+fn main() {
+    // parse the command line arguments
+    let args = match parse_args() {
+        Ok(args) => args,
+        Err(err) => return eprintln!("{}", err),
+    };
+    // read in the source code from the file
+    let source = match fs::read_to_string(&args.in_path) {
+        Ok(source) => source,
+        Err(err) => return eprintln!("{}", err),
+    };
+    // compile the source code
     let compiled = match compile(&source) {
         Ok(compiled) => compiled,
         Err(mut err) => {
@@ -108,8 +131,12 @@ fn main() {
             return;
         }
     };
-
-    let out_path = r"C:\Users\james\Projects\basic-transpilation-prime\test.s";
-    let mut out_file = File::create(out_path).expect("failed to create file");
-    out_file.write_all(compiled.as_bytes()).expect("failed to write");
+    // write the compiled code to the output file
+    match File::create(&args.out_path)
+        .and_then(|mut file| {
+            file.write_all(compiled.as_bytes())
+        }) {
+        Ok(_) => {},
+        Err(err) => return eprintln!("{}", err),
+    }
 }
