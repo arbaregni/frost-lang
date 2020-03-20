@@ -21,6 +21,9 @@ use crate::mirgen::create_mir;
 use crate::type_inference::{type_check, Type};
 use crate::error::Error;
 use crate::scope::ScopeId;
+use crate::mir::Instr;
+use std::fs::File;
+use std::io::Write;
 use petgraph::dot::{Dot, Config};
 use crate::codegen::generate_mips;
 
@@ -94,18 +97,38 @@ fn compile(source: &str) -> Result<String, Error> {
     ));
     println!("{:?}", mir.ordering);
 
-
-
-
     let compiled = generate_mips(&mir, &symbol_table);
 
     Ok(compiled)
 }
 
-fn main() {
-    let path = r"C:\Users\james\Projects\basic-transpilation-prime\test.txt";
-    let source = fs::read_to_string(path).expect("failed to read file");
+struct Args {
+    in_path: String,
+    out_path: String,
+}
 
+fn parse_args() -> Result<Args, String> {
+    // the defaults
+    let mut args = Args {
+        in_path: String::from(r"C:\Users\james\Projects\basic-transpilation-prime\test.txt"),
+        out_path: String::from(r"C:\Users\james\Projects\basic-transpilation-prime\test.s"),
+    };
+
+    Ok(args)
+}
+
+fn main() {
+    // parse the command line arguments
+    let args = match parse_args() {
+        Ok(args) => args,
+        Err(err) => return eprintln!("{}", err),
+    };
+    // read in the source code from the file
+    let source = match fs::read_to_string(&args.in_path) {
+        Ok(source) => source,
+        Err(err) => return eprintln!("Could not read from {}: {}", args.in_path, err),
+    };
+    // compile the source code
     let compiled = match compile(&source) {
         Ok(compiled) => compiled,
         Err(mut err) => {
@@ -114,6 +137,12 @@ fn main() {
             return;
         }
     };
-
-    println!("{}", compiled);
+    // write the compiled code to the output file
+    if let Err(err) = File::create(&args.out_path)
+                                    .and_then(|mut file| {
+                                        file.write_all(compiled.as_bytes())
+                                    })
+    {
+        eprintln!("Could not write to {}: {}", args.out_path, err);
+    }
 }
