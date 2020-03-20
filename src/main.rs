@@ -21,6 +21,8 @@ use crate::type_inference::{type_check, Type};
 use crate::error::Error;
 use crate::scope::ScopeId;
 use crate::mir::Instr;
+use std::fs::File;
+use std::io::Write;
 
 /// # Example
 /// struct Point {
@@ -95,8 +97,8 @@ fn compile(source: &str) -> Result<String, Error> {
 }
 
 fn main() {
-    let path = r"C:\Users\james\Projects\basic-transpilation-prime\test.txt";
-    let source = fs::read_to_string(path).expect("failed to read file");
+    let in_path = r"C:\Users\james\Projects\basic-transpilation-prime\test.txt";
+    let source = fs::read_to_string(in_path).expect("failed to read file");
 
     let compiled = match compile(&source) {
         Ok(compiled) => compiled,
@@ -107,5 +109,7 @@ fn main() {
         }
     };
 
-    println!("{}", compiled);
+    let out_path = r"C:\Users\james\Projects\basic-transpilation-prime\test.s";
+    let mut out_file = File::create(out_path).expect("failed to create file");
+    out_file.write_all(compiled.as_bytes()).expect("failed to write");
 }
