@@ -74,6 +74,7 @@ fn make_conflict_graph(intervals: &HashMap<VarblId, Interval>) -> ConflictGraph 
     let edges = util::estimate_edge_count(nodes);
     let mut graph = ConflictGraph::with_capacity(nodes, edges);
     for (varbl_a, interval_b) in intervals {
+        graph.add_node(*varbl_a);
         for (varbl_b, interval_b) in intervals {
             if *varbl_a == *varbl_b { continue; }
             graph.add_edge(*varbl_a, *varbl_b, ());
