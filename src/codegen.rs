@@ -62,7 +62,7 @@ impl MipsProgram {
             Add{dest, a, b} => {
                 match (a, b) {
                     (Varbl(a), Varbl(b)) => {
-                        make_instr!(self, "add", self.reg_alloc.get(a), self.reg_alloc.get(b), self.reg_alloc.get(b));
+                        make_instr!(self, "add", self.reg_alloc.get(dest), self.reg_alloc.get(a), self.reg_alloc.get(b));
                     }
                     (Varbl(a), Const(n)) | (Const(n), Varbl(a)) => {
                         make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), n);
@@ -132,6 +132,7 @@ impl MipsProgram {
 pub fn generate_mips(mir: &Mir, symbols: &SymbolTable) -> String
 {
     let reg_alloc = regalloc::allocate_registers(mir, symbols);
+    println!("{}", reg_alloc);
     let mut prgm = MipsProgram::new(reg_alloc);
     prgm.pre_process(mir, symbols);
     for (instr, _idx) in mir.iter() {

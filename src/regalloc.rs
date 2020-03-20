@@ -8,6 +8,7 @@ use petgraph::{Undirected};
 use petgraph::graph::NodeIndex;
 use petgraph::graphmap::GraphMap;
 use petgraph::data::Build;
+use std::fmt::{Formatter, Error};
 
 const MIPS_NUM_FEASIBLE_REGISTERS: usize = 16;
 const MIPS_FEASIBLE_REGISTERS: [&'static str; MIPS_NUM_FEASIBLE_REGISTERS]
@@ -28,7 +29,14 @@ impl RegisterAllocation {
         MIPS_FEASIBLE_REGISTERS[color as usize]
     }
 }
-
+impl std::fmt::Display for RegisterAllocation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        for (varbl, color) in self.colors.iter() {
+            writeln!(f, "{} <-> {}", varbl, MIPS_FEASIBLE_REGISTERS[*color as usize])?;
+        }
+        Ok(())
+    }
+}
 #[derive(Debug)]
 /// The Live Range for a variable
 struct Interval {
@@ -73,11 +81,12 @@ fn make_conflict_graph(intervals: &HashMap<VarblId, Interval>) -> ConflictGraph 
     let nodes = intervals.len();
     let edges = util::estimate_edge_count(nodes);
     let mut graph = ConflictGraph::with_capacity(nodes, edges);
-    for (varbl_a, interval_b) in intervals {
-        graph.add_node(*varbl_a);
-        for (varbl_b, interval_b) in intervals {
-            if *varbl_a == *varbl_b { continue; }
-            graph.add_edge(*varbl_a, *varbl_b, ());
+    for (&varbl_a, interval_a) in intervals {
+        graph.add_node(varbl_a);
+        for (&varbl_b, interval_b) in intervals {
+            if varbl_a != varbl_b && interval_a.intersects(interval_b) {
+                graph.add_edge(varbl_a, varbl_b, ());
+            }
         }
     }
     graph
