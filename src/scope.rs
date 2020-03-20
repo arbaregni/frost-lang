@@ -79,6 +79,7 @@ impl ScopeTable {
         self.scopes[scope_id.0].bind(ident, symbol_id);
     }
     /// Searches all scopes for the name of this symbol id
+    #[allow(dead_code)]
     pub fn recover_ident(&self, symbol_id: SymbolId) -> Option<&str> {
         for scope in self.scopes.iter() {
             for (ident, id) in scope.bound_symbols.iter() {

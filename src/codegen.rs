@@ -1,175 +1,124 @@
-use crate::mir;
-use crate::mir::{Val, MirGraph, Mir, Instr};
-use crate::symbols::{SymbolId, SymbolTable};
-use std::collections::{HashMap, HashSet};
-use crate::functions::FunDec;
-use std::ops::Deref;
-use petgraph::graph::NodeIndex;
-
-pub trait Program {
-    fn new() -> Self;
-    fn pre_process(&mut self, mir: &Mir, symbols: &SymbolTable);
-    fn compile_instr(&mut self, instr: &Instr, reg_alloc: &RegisterAllocation);
-    fn post_process(&mut self);
-    fn to_string(&self) -> String;
-}
+use crate::{regalloc};
+use crate::mir::{Val, Mir, Instr, VarblId};
+use crate::symbols::{SymbolTable};
+use crate::regalloc::{RegisterAllocation};
 
 pub struct MipsProgram {
-    label_counter: usize,
-    labels_by_symbol: HashMap<SymbolId, String>,
-    active_save_regs: Vec<String>,
-    active_temp_regs: Vec<String>,
-    text: String
+    text: String,
+    reg_alloc: RegisterAllocation,
+    label_counter: u32,
 }
 
 macro_rules! write_label {
-    ($mips_program:expr, $label:expr) => {
-        $mips_program.text.push_str(&format!("{}:\n", $label));
+    ($prgm:expr, $label:expr) => {
+        $prgm.text.push_str(&format!("{}:\n", $label));
     }
 }
 macro_rules! make_instr {
-    ($mips_program:expr, $prefix:expr, $dest:expr, $offset:expr, ( $reg:expr )) => {
-        $mips_program.text.push_str(&format!("    {} {},{}({})\n", $prefix, $dest, $offset, $reg))
+    ($prgm:expr, $prefix:expr, $dest:expr, $offset:expr, ( $reg:expr )) => {
+        $prgm.text.push_str(&format!("    {} {},{}({})\n", $prefix, $dest, $offset, $reg))
     };
-    ($mips_program:expr, $prefix:expr) => {
-        $mips_program.text.push_str(&format!("    {}\n", $prefix))
+    ($prgm:expr, $prefix:expr) => {
+        $prgm.text.push_str(&format!("    {}\n", $prefix))
     };
-    ($mips_program:expr, $prefix:expr, $reg:expr) => {
-        $mips_program.text.push_str(&format!("    {} {}\n", $prefix, $reg))
+    ($prgm:expr, $prefix:expr, $reg:expr) => {
+        $prgm.text.push_str(&format!("    {} {}\n", $prefix, $reg))
     };
-    ($mips_program:expr, $prefix:expr, $dest:expr, $reg:expr) => {
-        $mips_program.text.push_str(&format!("    {} {},{}\n", $prefix, $dest, $reg))
+    ($prgm:expr, $prefix:expr, $dest:expr, $reg:expr) => {
+        $prgm.text.push_str(&format!("    {} {},{}\n", $prefix, $dest,$reg))
     };
-    ($mips_program:expr, $prefix:expr, $dest:expr, $reg0:expr, $reg1:expr) => {
-        $mips_program.text.push_str(&format!("    {} {},{},{}\n", $prefix, $dest, $reg0, $reg1))
+    ($prgm:expr, $prefix:expr, $dest:expr, $reg0:expr, $reg1:expr) => {
+        $prgm.text.push_str(&format!("    {} {},{},{}\n", $prefix, $dest, $reg0, $reg1))
     };
-
 }
 
-impl Program for MipsProgram {
-    fn new() -> Self {
-        Self {
-            label_counter: 0,
-            labels_by_symbol: HashMap::new(),
-            active_save_regs: Vec::new(),
-            active_temp_regs: Vec::new(),
-            text: String::new(),
+macro_rules! set_reg {
+    ($prgm:expr, $reg:expr, $val:expr) => {
+        match $val {
+            Val::Varbl(varbl) => make_instr!($prgm, "move", $reg, $prgm.reg_alloc.get(varbl)),
+            Val::Const(n) => make_instr!($prgm, "li", $reg, *n),
+            Val::Nothing => { /* no op */ },
         }
     }
-    fn pre_process(&mut self, mir: &Mir, symbols: &SymbolTable) {
+}
+
+impl MipsProgram {
+    fn new(reg_alloc: RegisterAllocation) -> Self {
+        Self {
+            text: String::new(),
+            reg_alloc,
+            label_counter: 0,
+        }
+    }
+    fn pre_process(&mut self, mir: &Mir, _symbols: &SymbolTable) {
         // prepare for the main function
         self.text.push_str("    .text\n    .globl main\n");
         write_label!(self, "main");
     }
-    fn compile_instr(&mut self, instr: &Instr, reg_alloc: &RegisterAllocation) {
+    fn compile_instr(&mut self, instr: &Instr) {
         use Instr::*;
         use Val::*;
         match instr {
             Add{dest, a, b} => {
                 match (a, b) {
-                    (v1 @ Varbl(_), v2 @ Varbl(_)) => {
-                        make_instr!(self, "add", &self.val_str(&dest), &self.val_str(&v1), &self.val_str(&v2));
+                    (Varbl(a), Varbl(b)) => {
+                        make_instr!(self, "add", self.reg_alloc.get(a), self.reg_alloc.get(b), self.reg_alloc.get(b));
                     }
-                    (v @ Varbl(_), c @ Const(_)) | (c @ Const(_), v  @ Varbl(_)) => {
-                        make_instr!(self, "addi",&self.val_str(&dest),&self.val_str(&v),&self.val_str(&c));
+                    (Varbl(a), Const(n)) | (Const(n), Varbl(a)) => {
+                        make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), n);
                     }
                     (Const(n), Const(m)) => {
-                        make_instr!(self, "li",&self.val_str(&dest),&format!("{}", n+m));
+                        make_instr!(self, "li", self.reg_alloc.get(dest), n + m);
                     }
                     (val, Nothing) | (Nothing, val) => {
-                        self.set_reg(&self.val_str(dest), val);
+                        set_reg!(self, self.reg_alloc.get(dest), val);
                     }
                 }
             }
             Sub{dest, a, b} => {
                 match (a, b) {
-                    (v1 @ Varbl(_), v2 @ Varbl(_)) => {
-                        make_instr!(self, "sub",&self.val_str(&dest),&self.val_str(&v1),&self.val_str(&v2));
+                    (Varbl(a), Varbl(b)) => {
+                        make_instr!(self, "sub", self.reg_alloc.get(dest), self.reg_alloc.get(a), self.reg_alloc.get(b));
                     }
-                    (v @ Varbl(_), Const(c)) => {
-                        make_instr!(self, "addi",&self.val_str(&dest),&self.val_str(&v),&format!("{}", -c));
+                    (Varbl(a), Const(n)) => {
+                        make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), -n);
                     }
-                    (Const(c), v  @ Varbl(_)) => {
+                    (Const(n), Varbl(a)) => {
                         // get c - v
-                        make_instr!(self, "addi",&self.val_str(&dest),&self.val_str(&v),&format!("{}", -c));
+                        make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), -n);
                         // find the negative
-                        make_instr!(self, "sub", &self.val_str(&dest), "$zero", &self.val_str(&dest));
+                        make_instr!(self, "sub", self.reg_alloc.get(dest), "$zero", self.reg_alloc.get(dest));
                     }
                     (Const(n), Const(m)) => {
-                        make_instr!(self, "li",&self.val_str(&dest),&format!("{}", n-m));
+                        make_instr!(self, "li", self.reg_alloc.get(dest), n - m);
                     }
                     (_, Nothing) | (Nothing, _) => unreachable!(),
                 }
             }
             Equals{dest, a, b} => {
                 // first, take the difference of a and b, then we will negate it
-                self.compile_instr(&Instr::Sub{dest: *dest, a: *a, b: *b}, reg_alloc);
-                let valstr = self.val_str(&dest);
-                make_instr!(self, "nor",&valstr, &valstr, &valstr);
+                self.compile_instr(&Instr::Sub{dest: *dest, a: *a, b: *b});
+                let loc = self.reg_alloc.get(dest);
+                make_instr!(self, "nor", loc, loc, loc);
             }
             Set{dest, expr} => {
-                self.set_reg(&self.val_str(&dest), &expr);
+                set_reg!(self, self.reg_alloc.get(dest), expr)
             }
             Print(val) => {
                 // assume that val is an integer for now
                 make_instr!(self, "li", "$v0", "1"); // prepare for syscall 1 (print int)
-                self.set_reg("$a0", &val);
+                set_reg!(self, "$a0", val);
                 make_instr!(self, "syscall");
             }
-            /* Cond{test, invert, body} => {
-                match test {
-                    Varbl(_) => {
-                        // request a label to jump to on false
-                        let lbl = self.make_label();
-                        // a regular condition jumps over its body if it finds zero
-                        // an inverted condition jumps over its body on non-zero values
-                        let prefix = if *invert { "bne" } else { "beq" };
-                        // create an instruction of the form:
-                        // beq $t0,$zero,Label
-                        make_instr!(self, prefix, "$zero", &self.val_str(&test), &lbl);
-                        // write the body of the if statement
-                        for instr in body {
-                            self.compile_instr(instr);
-                        }
-                        write_label!(self, lbl);
-                    }
-                    Const(c) if (*c != 0) ^ invert => {
-                        // non-zero constant (or zero constant and we inverted): must execute
-                        for inst in body {
-                            self.compile_instr(inst);
-                        }
-                    }
-                    Const(_) | Nothing => { /* no - op */ }
-                }
-            } */
-            /* CallRtn {dest, symbol_id, args } => {
-                let mut idx = 0;
-                // save the things that need to be saved by the caller
-                for temp_reg in self.active_temp_regs.iter() {
-                    make_instr!(self, "sw", temp_reg, idx, ( "$sp" ));
-                }
-                // caller must always save the return address
-                make_instr!(self, "sw", "$ra", idx, ( "$sp" ));
-                idx += 1;
-
-                // move the stack pointer down
-                make_instr!(self, "addi", "$sp", "$sp", -idx);
-
-                // jump and link to the subroutine
-                let lbl = &self.labels_by_symbol[symbol_id];
-                make_instr!(self, "jal", lbl);
-
-                // move the stack pointer back up
-                make_instr!(self, "addi", "$sp", "$sp", idx);
-
-                // recover return address
-                idx -= 1;
-                make_instr!(self, "lw", "$ra", idx, ( "$sp" ));
-            } */
             _ => {
                 println!("warning! unrecognized instr {:?}", instr);
             }
         }
+    }
+    fn make_label(&mut self) -> String {
+        let lbl = format!("L{}", self.label_counter);
+        self.label_counter += 1;
+        lbl
     }
     fn post_process(&mut self) {
         make_instr!(self, "jr", "$ra"); // return to caller
@@ -179,63 +128,14 @@ impl Program for MipsProgram {
     }
 }
 
-impl MipsProgram {
-    fn make_label(&mut self) -> String {
-        let lbl = format!("L{}", self.label_counter);
-        self.label_counter += 1;
-        lbl
-    }
-    fn val_str(&self, val: &mir::Val) -> String {
-        match val {
-            mir::Val::Varbl(ref idx) => format!("$t{}", *idx),
-            mir::Val::Const(ref num) => format!("{}", *num),
-            mir::Val::Nothing => String::new(), // no-op
-        }
-    }
-    fn set_reg(&mut self, dest: &str, value: &Val) {
-        let prefix = match value {
-            Val::Varbl(_) => "move",
-            Val::Const(_) => "li",
-            Val::Nothing  => return, // no - op
-        };
-        make_instr!(self, prefix, &dest, &self.val_str(&value));
-    }
-}
 
-fn sort_blocks(mir: &Mir) -> Vec<NodeIndex> {
-    // TODO getting better results out of this by using dominators
-    // for now, we'll just pick an arbitrary depth-first order
-    let mut result = Vec::with_capacity(mir.graph.node_count());
-    let mut todo = vec![mir.entry_block];
-    let mut visited = HashSet::new();
-    while let Some(node) = todo.pop() {
-        result.push(node);
-        visited.insert(node);
-        for neighbor in mir.graph.neighbors(node) {
-            if visited.contains(&neighbor) { continue; }
-            todo.push(neighbor);
-        }
-    }
-    result
-}
-
-type RegisterAllocation = HashMap<(), ()>;
-fn reg_alloc(mir: &Mir, symbols: &SymbolTable) -> RegisterAllocation {
-    unimplemented!()
-}
-
-pub fn compile<Target>(mir: &Mir, symbols: &SymbolTable) -> String
-    where Target: Program
+pub fn generate_mips(mir: &Mir, symbols: &SymbolTable) -> String
 {
-    let block_ordering = sort_blocks(mir);
-    println!("ordering: {:?}", block_ordering);
-    let reg_alloc = reg_alloc(mir, symbols);
-    let mut prgm = Target::new();
+    let reg_alloc = regalloc::allocate_registers(mir, symbols);
+    let mut prgm = MipsProgram::new(reg_alloc);
     prgm.pre_process(mir, symbols);
-    for block in block_ordering {
-        for instr in mir.graph[block].iter() {
-            prgm.compile_instr(instr, &reg_alloc);
-        }
+    for (instr, _idx) in mir.iter() {
+        prgm.compile_instr(instr);
     }
     prgm.post_process();
     prgm.to_string()

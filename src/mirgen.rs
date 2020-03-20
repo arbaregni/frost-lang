@@ -1,5 +1,5 @@
 use crate::ast::{Ast, AstKind, AstBlock};
-use crate::mir::{Instr, Val, MirGraph, MirBlock, EdgeInfo, Mir};
+use crate::mir::{Instr, Val, MirGraph, MirBlock, EdgeInfo, Mir, VarblId};
 use crate::symbols::{SymbolTable, SymbolId};
 use petgraph::graph::NodeIndex;
 use crate::scope::ScopeId;
@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use crate::functions::SubroutineInfo;
 
 struct AlphaRenamer {
-    counter: usize,
-    table: HashMap<SymbolId, Val>, // maps identifiers to their corresponding mir values
+    counter: u32,
+    table: HashMap<SymbolId, VarblId>, // maps identifiers to their corresponding mir values
 }
 impl AlphaRenamer {
     pub fn new() -> AlphaRenamer {
@@ -19,23 +19,23 @@ impl AlphaRenamer {
         }
     }
     /// get the mir value associated with an identifier in the specified scope
-    pub fn rename(&mut self, name: &str, scope_id: ScopeId, symbols: &SymbolTable) -> Val {
+    pub fn rename(&mut self, name: &str, scope_id: ScopeId, symbols: &SymbolTable) -> VarblId {
         let id = symbols.scope_table.get_id(name, scope_id).expect(&f!("unbound symbol {name} in scope {scope_id}")).clone();
         match self.table.entry(id) {
             Entry::Occupied(ref entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
-                let val = Val::Varbl(self.counter);
-                entry.insert(val.clone());
+                let varbl = VarblId(self.counter);
+                entry.insert(varbl.clone());
                 self.counter += 1;
-                val
+                varbl
             }
         }
     }
     /// make an intermediate value
-    pub fn make_intermediate(&mut self) -> Val {
-        let val = Val::Varbl(self.counter);
+    pub fn make_intermediate(&mut self) -> VarblId {
+        let varbl = VarblId(self.counter);
         self.counter += 1;
-        val
+        varbl
     }
 }
 
@@ -52,12 +52,12 @@ impl Ast {
             AstKind::Real(_v) => unimplemented!(),
             AstKind::String(_) => unimplemented!(),
             AstKind::Boole(v) => Val::Const(if v { 1 } else { 0 }),
-            AstKind::Ident(ref name) => renamer.rename(name, self.scope_id, symbols),
+            AstKind::Ident(ref name) => Val::Varbl(renamer.rename(name, self.scope_id, symbols)),
             AstKind::TypeExpr(_) => unimplemented!(),
             AstKind::Block(ref block) => block.generate_instr(mir_graph, curr_block, renamer, symbols),
             AstKind::IfStmnt{ref test, ref if_branch, ref else_branch} => {
                 // calculate the condition first
-                let condition = test.generate_instr(mir_graph, curr_block, renamer, symbols);
+                let condition = test.generate_instr(mir_graph, curr_block, renamer, symbols); //TODO: use the condition to determine the edge info
                 // create a place for the result when the branches join back
                 let dest = renamer.make_intermediate();
 
@@ -78,30 +78,22 @@ impl Ast {
                 mir_graph.add_edge(if_block, *curr_block, EdgeInfo::new());
                 mir_graph.add_edge(else_block, *curr_block, EdgeInfo::new());
 
-                dest
+                Val::Varbl(dest)
             }
             AstKind::FunCall { ref func, ref args } => {
                 let dest = renamer.make_intermediate();
                 let arg_vals: Vec<Val> = args.iter().map(|arg| arg.generate_instr(mir_graph, curr_block, renamer, symbols)).collect();
                 // hard-code intrinsics for now
-                match func.as_str() {
-                    "add" => {
-                        mir_graph[*curr_block].push(Instr::Add{dest, a: arg_vals[0], b: arg_vals[1]});
-                        return dest;
-                    }
-                    "sub" => {
-                        mir_graph[*curr_block].push(Instr::Sub{dest, a: arg_vals[0], b: arg_vals[1]});
-                        return dest;
-                    }
-                    "equals" => {
-                        mir_graph[*curr_block].push(Instr::Equals{dest, a: arg_vals[0], b: arg_vals[1]});
-                        return dest;
-                    }
-                    "print" => {
-                        mir_graph[*curr_block].push(Instr::Print(arg_vals[0]));
-                        return dest;
-                    }
-                    _ => { /* not an intrinsic */ }
+                let maybe_intrinsic = match func.as_str() {
+                    "add" => Some( Instr::Add{dest, a: arg_vals[0], b: arg_vals[1]} ),
+                    "sub" => Some( Instr::Sub{dest, a: arg_vals[0], b: arg_vals[1]} ),
+                    "equals" => Some( Instr::Equals{dest, a: arg_vals[0], b: arg_vals[1]} ),
+                    "print" => Some( Instr::Print(arg_vals[0]) ),
+                    _ => None,
+                };
+                if let Some(instr) = maybe_intrinsic {
+                    mir_graph[*curr_block].push(instr);
+                    return Val::Varbl(dest);
                 }
                 let symbol_id = *symbols.scope_table.get_id(func, self.scope_id).expect(&f!("unbound function `{func}`"));
                 let subrtn = find_or_create_subroutine(mir_graph, &symbol_id, renamer, symbols);
@@ -120,7 +112,7 @@ impl Ast {
                 // put the result of the subroutine into our value
                 mir_graph[*curr_block].push(Instr::Set{dest, expr: subrtn.return_val });
 
-                dest
+                Val::Varbl(dest)
             }
             AstKind::Assign{ ref ident, opt_type: _, ref rhs } => {
                 let dest = renamer.rename(ident, rhs.scope_id, symbols);
@@ -165,7 +157,7 @@ fn find_or_create_subroutine<'a>(mir_graph: &mut MirGraph, symbol_id: &SymbolId,
     // extract the mir values for our parameters
     let args = fun_dec.params.iter().map(|param| {
         renamer.rename(param, fun_dec.scope_id(), symbols)
-    }).collect::<Vec<Val>>();
+    }).collect::<Vec<VarblId>>();
     fun_dec.set_mir(SubroutineInfo{ start, end, args, return_val: returns });
     fun_dec.maybe_mir().unwrap()
 }
@@ -178,5 +170,5 @@ pub fn create_mir(ast_nodes: &[Ast], symbols: &SymbolTable) -> Mir {
     for node in ast_nodes {
         node.generate_instr(&mut graph, &mut exit_block, &mut renamer, symbols);
     }
-    Mir { graph, entry_block, exit_block }
+    Mir::from(graph, entry_block, exit_block)
 }

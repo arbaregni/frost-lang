@@ -15,3 +15,10 @@ impl <I> Iterator for Tuples<I>
         Some((self.iter.next()?, self.iter.next()?))
     }
 }
+
+/// Estimate the edge count for a certain number of nodes
+/// Using the worst-case scenario
+pub fn estimate_edge_count(nodes: usize) -> usize {
+    // TODO: use better estimation
+    (nodes * nodes - nodes) / 2
+}

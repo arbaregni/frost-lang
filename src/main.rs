@@ -13,6 +13,7 @@ mod scope;
 mod mirgen;
 mod mir;
 mod codegen;
+mod regalloc;
 
 use std::fs;
 use crate::symbols::SymbolTable;
@@ -21,6 +22,7 @@ use crate::type_inference::{type_check, Type};
 use crate::error::Error;
 use crate::scope::ScopeId;
 use petgraph::dot::{Dot, Config};
+use crate::codegen::generate_mips;
 
 /// # Example
 /// struct Point {
@@ -88,12 +90,14 @@ fn compile(source: &str) -> Result<String, Error> {
 
     println!("{}", Dot::with_config(
         &mir.graph,
-        &[Config::EdgeNoLabel, ]
+        &[Config::EdgeNoLabel]
     ));
+    println!("{:?}", mir.ordering);
 
 
 
-    let compiled = codegen::compile::<codegen::MipsProgram>(&mir, &symbol_table);
+
+    let compiled = generate_mips(&mir, &symbol_table);
 
     Ok(compiled)
 }

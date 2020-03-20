@@ -95,7 +95,7 @@ impl SymbolTable {
         let rc = self.fun_table.get(symbol_id)?;
         Some(rc.as_ref())
     }
-    /// Iterate over all the functions which need to be compile dto subroutines
+    /// Iterate over all the functions which need to be compiled to subroutines
     pub fn subroutine_iter(&self) -> impl Iterator<Item = (SymbolId, Rc<FunDec>)> + '_ {
         self.fun_table.iter().filter_map(|(symbol_id, fun_dec_rc)| {
             if fun_dec_rc.has_mir() {
@@ -104,15 +104,6 @@ impl SymbolTable {
                 None
             }
         })
-    }
-    pub fn get_fun_arguments_as_mir_vals(&'_ mut self, id: &SymbolId) {
-//        let fun_dec = self.get_fun_by_id(&id).expect("unbound subroutine");
-//        let scope_id = fun_dec.maybe_scope_id.expect("unassigned scope_id for function");
-//        for param_name in fun_dec.params.iter() {
-//            let param_id = self.get_id(param_name, scope_id).expect(&f!("unbound parameter {param_name} in scope of function {id}"));
-//            let param_val = self.val_table[param_id];
-//            println!("argument: {:?}", param_val);
-//        }
     }
     pub fn quant_entry(&'_ mut self, ident: &str, scope_id: ScopeId) -> Entry<'_, SymbolId, Quantified> {
         let id = self.scope_table.get_id(ident, scope_id).expect(&f!("unbound symbol {ident} in scope {scope_id}"));
