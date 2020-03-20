@@ -120,7 +120,7 @@ fn main() {
     // read in the source code from the file
     let source = match fs::read_to_string(&args.in_path) {
         Ok(source) => source,
-        Err(err) => return eprintln!("{}", err),
+        Err(err) => return eprintln!("Could not read from {}: {}", args.in_path, err),
     };
     // compile the source code
     let compiled = match compile(&source) {
@@ -132,11 +132,11 @@ fn main() {
         }
     };
     // write the compiled code to the output file
-    match File::create(&args.out_path)
-        .and_then(|mut file| {
-            file.write_all(compiled.as_bytes())
-        }) {
-        Ok(_) => {},
-        Err(err) => return eprintln!("{}", err),
+    if let Err(err) = File::create(&args.out_path)
+                                    .and_then(|mut file| {
+                                        file.write_all(compiled.as_bytes())
+                                    })
+    {
+        eprintln!("Could not write to {}: {}", args.out_path, err);
     }
 }
