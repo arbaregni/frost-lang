@@ -1,12 +1,25 @@
 use crate::{regalloc};
-use crate::mir::{Val, Mir, Instr, VarblId};
+use crate::mir::{Val, Mir, Instr, MirBlock, ExitStrategy};
 use crate::symbols::{SymbolTable};
 use crate::regalloc::{RegisterAllocation};
 
+pub struct LabelMaker {
+    counter: u32,
+}
+impl LabelMaker {
+    pub fn new() -> LabelMaker {
+        LabelMaker { counter: 0 }
+    }
+    pub fn make_label(&mut self) -> String {
+        let num = self.counter;
+        self.counter += 1;
+        f!("L{num}")
+    }
+}
 pub struct MipsProgram {
     text: String,
     reg_alloc: RegisterAllocation,
-    label_counter: u32,
+    label_maker: LabelMaker
 }
 
 macro_rules! write_label {
@@ -47,13 +60,12 @@ impl MipsProgram {
         Self {
             text: String::new(),
             reg_alloc,
-            label_counter: 0,
+            label_maker: LabelMaker::new()
         }
     }
     fn pre_process(&mut self, mir: &Mir, _symbols: &SymbolTable) {
         // prepare for the main function
         self.text.push_str("    .text\n    .globl main\n");
-        write_label!(self, "main");
     }
     fn compile_instr(&mut self, instr: &Instr) {
         use Instr::*;
@@ -115,18 +127,33 @@ impl MipsProgram {
             }
         }
     }
-    fn make_label(&mut self) -> String {
-        let lbl = format!("L{}", self.label_counter);
-        self.label_counter += 1;
-        lbl
-    }
-    fn post_process(&mut self) {
-        make_instr!(self, "jr", "$ra"); // return to caller
-    }
-    fn to_string(&self) -> String {
-        self.text.clone()
+    fn exit_block(&mut self, mir: &Mir, block: &MirBlock) {
+        match block.exit_strategy() {
+            ExitStrategy::Undefined => { /* nothing to do: we just hope that the Mir::Instr's handle it, or that the fall through is correct */ },
+            ExitStrategy::Call(idx) => make_instr!(self, "jal", mir.graph[idx].label(&mut self.label_maker)),
+            ExitStrategy::Ret => make_instr!(self, "jr", "$ra"), // return to caller
+            ExitStrategy::AlwaysGoto(idx) => make_instr!(self, "j", mir.graph[idx].label(&mut self.label_maker)),
+            ExitStrategy::Branch { condition, on_zero, on_nonzero  } => {
+                match condition {
+                    Val::Varbl(v) => {
+                        make_instr!(self, "beq", self.reg_alloc.get(&v), "$zero", mir.graph[on_zero].label(&mut self.label_maker));
+                    },
+                    Val::Const(0) => {
+                        // we are going down the on_zero path
+                        make_instr!(self, "j", mir.graph[on_zero].label(&mut self.label_maker));
+                    },
+                    Val::Const(_) => {
+                        // we are going down the on_nonzero path
+                        make_instr!(self, "j", mir.graph[on_nonzero].label(&mut self.label_maker));
+                    },
+                    Val::Nothing => unreachable!(),
+                }
+
+            },
+        }
     }
 }
+
 
 
 pub fn generate_mips(mir: &Mir, symbols: &SymbolTable) -> String
@@ -135,10 +162,14 @@ pub fn generate_mips(mir: &Mir, symbols: &SymbolTable) -> String
     println!("{}", reg_alloc);
     let mut prgm = MipsProgram::new(reg_alloc);
     prgm.pre_process(mir, symbols);
-    for (instr, _idx) in mir.iter() {
-        prgm.compile_instr(instr);
-    }
-    prgm.post_process();
-    prgm.to_string()
-}
+    for (block, edges) in mir.blocks() {
+        // print the label
+        let lbl = block.label(&mut prgm.label_maker);
+        write_label!(prgm, lbl);
+        // compile every instruction in this block
+        for instr in block.iter() { prgm.compile_instr(instr); }
 
+        prgm.exit_block(mir, block);
+    }
+    prgm.text
+}

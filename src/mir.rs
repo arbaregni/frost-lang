@@ -1,9 +1,11 @@
 use crate::symbols::SymbolId;
-use petgraph::graph::{Graph, NodeIndex};
-use petgraph::Directed;
+use petgraph::graph::{Graph, NodeIndex, Edges};
+use petgraph::{Directed, Direction};
 use std::fmt::{Formatter, Error};
 use std::collections::HashSet;
 use std::cmp::Ordering;
+use once_cell::unsync::OnceCell;
+use crate::codegen::LabelMaker;
 
 #[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, Ord, PartialOrd)]
 pub struct VarblId(pub u32);
@@ -89,13 +91,15 @@ impl std::fmt::Display for Instr {
 
 #[derive(Debug, Clone)]
 pub enum EdgeInfo {
-    Unit
+    Unit,
 }
 impl EdgeInfo {
     pub fn new() -> EdgeInfo {
         EdgeInfo::Unit
     }
 }
+
+
 impl std::fmt::Display for EdgeInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "()")
@@ -104,25 +108,57 @@ impl std::fmt::Display for EdgeInfo {
 
 pub type MirGraph = Graph<MirBlock, EdgeInfo, Directed>;
 
+#[derive(Debug, Clone)]
+pub enum ExitStrategy {
+    /// we don't know what will happen when we reach the end of the block
+    Undefined,
+    /// we are entering a subroutine
+    Call(NodeIndex),
+    /// we will return from the subroutine at the end of the block
+    Ret,
+    /// we are guaranteed to go to this block
+    AlwaysGoto(NodeIndex),
+    /// branch based on some value
+    Branch{ condition: Val, on_zero: NodeIndex, on_nonzero: NodeIndex}
+}
 
 #[derive(Debug, Clone)]
 pub struct MirBlock {
+    maybe_label: OnceCell<String>,
     instrs: Vec<Instr>,
+    exit_strategy: ExitStrategy,
 }
 impl MirBlock {
     pub fn new() -> MirBlock {
-        MirBlock { instrs: Vec::new() }
+        MirBlock {
+            maybe_label: OnceCell::new(),
+            instrs: vec![],
+            exit_strategy: ExitStrategy::Undefined
+        }
     }
-    pub fn push(&mut self, instr: Instr) {
-        self.instrs.push(instr);
+    pub fn entry_point() -> MirBlock {
+        let this = MirBlock::new();
+        this.maybe_label.set(String::from("main")).unwrap();
+        this
     }
-    pub fn iter(&self) -> impl Iterator<Item = &Instr> {
-        self.instrs.iter()
+    /// get our label, possibly using the label maker
+    pub fn label(&self, label_maker: &mut LabelMaker) -> &str {
+        if self.maybe_label.get().is_none() {
+            // we need to set it
+            self.maybe_label.set(label_maker.make_label()).unwrap();
+        }
+        self.maybe_label.get().unwrap().as_str()
     }
-    pub fn get(&self, idx: usize) -> Option<&Instr> {
-        self.instrs.get(idx)
+    pub fn set_exit_strategy(&mut self, strategy: ExitStrategy) {
+        self.exit_strategy = strategy;
     }
+    pub fn exit_strategy(&self) -> ExitStrategy { self.exit_strategy.clone() }
+    pub fn push(&mut self, instr: Instr) { self.instrs.push(instr); }
+    pub fn iter(&self) -> impl Iterator<Item = &Instr> { self.instrs.iter() }
+    pub fn get(&self, idx: usize) -> Option<&Instr> { self.instrs.get(idx) }
     pub fn len(&self) -> usize { self.instrs.len() }
+
+
 }
 impl std::fmt::Display for MirBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
@@ -194,8 +230,25 @@ impl Mir {
         let node_idx = *self.ordering.get(idx.outer)?;
         self.graph[node_idx].get(idx.inner)
     }
+    pub fn blocks(&self) -> MirBlocks {
+        MirBlocks { mir: self, idx: 0 }
+    }
     pub fn iter(&self) -> MirIterator {
         MirIterator { mir: self, idx: InstrIndex::new(0, 0) }
+    }
+}
+
+pub struct MirBlocks<'a> {
+    mir: &'a Mir,
+    idx: usize,
+}
+impl <'a> std::iter::Iterator for MirBlocks<'a> {
+    type Item = (&'a MirBlock, Edges<'a, EdgeInfo, Directed>);
+    fn next(&mut self) -> Option<Self::Item> {
+        let node_idx = self.mir.ordering.get(self.idx)?;
+        self.idx += 1;
+        let edges = self.mir.graph.edges_directed(*node_idx, Direction::Outgoing);
+        Some( (&self.mir.graph[*node_idx], edges) )
     }
 }
 
@@ -218,8 +271,6 @@ impl <'a> std::iter::Iterator for MirIterator<'a> {
             if self.idx.outer >= self.mir.ordering.len() { break; }
             node_idx = self.mir.ordering[self.idx.outer];
         }
-//        println!("iter.next() returning instr `{}`, idx = {:?}", instr, old_idx);
-//        println!("iterator state is now: {:?}, which will return instr `{:?}`", self.idx, self.mir.get(self.idx));
         Some( (instr, old_idx) )
     }
 }

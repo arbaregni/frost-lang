@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use std::cmp;
 use petgraph::dot::{Dot, Config};
 use petgraph::{Undirected};
-use petgraph::graph::NodeIndex;
 use petgraph::graphmap::GraphMap;
-use petgraph::data::Build;
 use std::fmt::{Formatter, Error};
 
 const MIPS_NUM_FEASIBLE_REGISTERS: usize = 16;

@@ -1,5 +1,5 @@
 use crate::ast::{Ast, AstKind, AstBlock};
-use crate::mir::{Instr, Val, MirGraph, MirBlock, EdgeInfo, Mir, VarblId};
+use crate::mir::{Instr, Val, MirGraph, MirBlock, EdgeInfo, Mir, VarblId, ExitStrategy};
 use crate::symbols::{SymbolTable, SymbolId};
 use petgraph::graph::NodeIndex;
 use crate::scope::ScopeId;
@@ -49,7 +49,7 @@ impl Ast {
     fn generate_instr(&self, mir_graph: &mut MirGraph, curr_block: &mut NodeIndex, renamer: &mut AlphaRenamer, symbols: &SymbolTable) -> Val {
         match self.kind {
             AstKind::Int(v) => Val::Const(v),
-            AstKind::Real(_v) => unimplemented!(),
+            AstKind::Real(_) => unimplemented!(),
             AstKind::String(_) => unimplemented!(),
             AstKind::Boole(v) => Val::Const(if v { 1 } else { 0 }),
             AstKind::Ident(ref name) => Val::Varbl(renamer.rename(name, self.scope_id, symbols)),
@@ -57,7 +57,7 @@ impl Ast {
             AstKind::Block(ref block) => block.generate_instr(mir_graph, curr_block, renamer, symbols),
             AstKind::IfStmnt{ref test, ref if_branch, ref else_branch} => {
                 // calculate the condition first
-                let condition = test.generate_instr(mir_graph, curr_block, renamer, symbols); //TODO: use the condition to determine the edge info
+                let condition = test.generate_instr(mir_graph, curr_block, renamer, symbols);
                 // create a place for the result when the branches join back
                 let dest = renamer.make_intermediate();
 
@@ -66,17 +66,26 @@ impl Ast {
                 let mut else_block = mir_graph.add_node(MirBlock::new());
                 mir_graph.add_edge(*curr_block, if_block, EdgeInfo::new());
                 mir_graph.add_edge(*curr_block, else_block, EdgeInfo::new());
+                // the current block goes to if_block if condition is nonzero and the else_block if it is zero
+                mir_graph[*curr_block].set_exit_strategy(ExitStrategy::Branch{
+                    condition, on_zero: else_block, on_nonzero: if_block
+                });
 
                 // create the branches
                 let if_val = if_branch.generate_instr(mir_graph, &mut if_block, renamer, symbols);
-                mir_graph[if_block].push(Instr::Set{dest, expr: if_val}); // note: if_block now contains the index of the last block in the if branch
+                // if_block now contains the index of the last block in the if branch
+                mir_graph[if_block].push(Instr::Set{dest, expr: if_val});
                 let else_val = else_branch.generate_instr(mir_graph, &mut else_block, renamer, symbols);
-                mir_graph[else_block].push(Instr::Set{dest, expr: else_val}); // note: else_block now contains the index of the last block in the else branch
+                // else_block now contains the index of the last block in the else branch
+                mir_graph[else_block].push(Instr::Set{dest, expr: else_val});
 
                 // join the branches together into a new block
                 *curr_block = mir_graph.add_node(MirBlock::new());
                 mir_graph.add_edge(if_block, *curr_block, EdgeInfo::new());
                 mir_graph.add_edge(else_block, *curr_block, EdgeInfo::new());
+                // both branches will always feed into the new block
+                mir_graph[if_block  ].set_exit_strategy(ExitStrategy::AlwaysGoto(*curr_block));
+                mir_graph[else_block].set_exit_strategy(ExitStrategy::AlwaysGoto(*curr_block));
 
                 Val::Varbl(dest)
             }
@@ -103,16 +112,15 @@ impl Ast {
                 for (subrtn_arg, arg_val) in subrtn.args.iter().zip(arg_vals.into_iter()) {
                     mir_graph[*curr_block].push(Instr::Set { dest: *subrtn_arg, expr: arg_val });
                 }
-                mir_graph[*curr_block].push(Instr::CallRtn(symbol_id));
                 mir_graph.add_edge(*curr_block, subrtn.start, EdgeInfo::new());
+                // we are calling a specific function here
+                mir_graph[*curr_block].set_exit_strategy(ExitStrategy::Call(subrtn.start));
 
                 // jump back to a new block
                 *curr_block = mir_graph.add_node(MirBlock::new());
                 mir_graph.add_edge(subrtn.end, *curr_block, EdgeInfo::new());
-                // put the result of the subroutine into our value
-                mir_graph[*curr_block].push(Instr::Set{dest, expr: subrtn.return_val });
-
-                Val::Varbl(dest)
+                // find_or_create_subroutine should have set the exit strategy for subrtn.end
+                subrtn.return_val
             }
             AstKind::Assign{ ref ident, opt_type: _, ref rhs } => {
                 let dest = renamer.rename(ident, rhs.scope_id, symbols);
@@ -145,30 +153,43 @@ fn find_or_create_subroutine<'a>(mir_graph: &mut MirGraph, symbol_id: &SymbolId,
     if let Some(subrtn_info) = fun_dec.maybe_mir() {
         return subrtn_info;
     }
-    // creating the starting block for this subroutine
+    // create the starting block for this subroutine
     let start = mir_graph.add_node(MirBlock::new());
-    // pass in the ending block index by reference
-    // it will hold the index of the last block created
-    let mut end = start;
-    // translate the body of the function
-    let returns = fun_dec.body.borrow().generate_instr(mir_graph, &mut end, renamer, symbols);
-    //TODO: insert an Instr::Ret here?
-
+    // create the dummy ending block for this routine
+    let end = mir_graph.add_node(MirBlock::new());
     // extract the mir values for our parameters
     let args = fun_dec.params.iter().map(|param| {
         renamer.rename(param, fun_dec.scope_id(), symbols)
     }).collect::<Vec<VarblId>>();
-    fun_dec.set_mir(SubroutineInfo{ start, end, args, return_val: returns });
+    // create our return value
+    let dest = renamer.make_intermediate();
+    // set the mir now. this is so self referential (i.e. recursive) functions can use this information
+    // and prevent find_or_create_subroutine from recursing forever
+    fun_dec.set_mir(SubroutineInfo{ start, end, args, return_val: Val::Varbl(dest) });
+
+    // we can find the actual ending block by passing it into generate_instr
+    let mut actual_end = start;
+    // translate the body of the function
+    let actual_return = fun_dec.body.borrow().generate_instr(mir_graph, &mut actual_end, renamer, symbols);
+    // hook the actual ending block into our "official" end
+    mir_graph.add_edge(actual_end, end, EdgeInfo::new());
+    mir_graph[actual_end].set_exit_strategy(ExitStrategy::AlwaysGoto(end));
+    // now set our "official" return value
+    mir_graph[end].push(Instr::Set{ dest, expr: actual_return });
+    // and the function ends by returning to the caller
+    mir_graph[end].set_exit_strategy(ExitStrategy::Ret);
     fun_dec.maybe_mir().unwrap()
 }
 
 pub fn create_mir(ast_nodes: &[Ast], symbols: &SymbolTable) -> Mir {
     let mut graph = MirGraph::new();
     let mut renamer = AlphaRenamer::new();
-    let entry_block = graph.add_node(MirBlock::new());
+    let entry_block = graph.add_node(MirBlock::entry_point());
     let mut exit_block = entry_block; // this will be the exit block after all the blocks are translated
     for node in ast_nodes {
         node.generate_instr(&mut graph, &mut exit_block, &mut renamer, symbols);
     }
+    // the program returns to it's caller at the end of the main function
+    graph[exit_block].set_exit_strategy(ExitStrategy::Ret);
     Mir::from(graph, entry_block, exit_block)
 }

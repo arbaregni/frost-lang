@@ -21,7 +21,6 @@ use crate::mirgen::create_mir;
 use crate::type_inference::{type_check, Type};
 use crate::error::Error;
 use crate::scope::ScopeId;
-use crate::mir::Instr;
 use std::fs::File;
 use std::io::Write;
 use petgraph::dot::{Dot, Config};
