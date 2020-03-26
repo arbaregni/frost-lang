@@ -108,9 +108,24 @@ struct Args {
 
 fn parse_args() -> Result<Args, String> {
     // the defaults
+    let mut in_path = None;
+    let mut out_path = String::from("out.s");
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--out" | "-o" => {
+                out_path = arg;
+            }
+            _ => if let Some(previous_arg) = in_path {
+                return Err(format!("conflicting input files: {} and {}", previous_arg, arg));
+            } else {
+                in_path = Some(arg);
+            }
+        }
+    }
+
     let mut args = Args {
-        in_path: String::from(r"test.txt"),
-        out_path: String::from(r"test.s"),
+        in_path: in_path.ok_or(format!("missing input file"))?,
+        out_path
     };
 
     Ok(args)
