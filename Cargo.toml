@@ -1,5 +1,5 @@
 [package]
-name = "basic-transpilation-prime"
+name = "frost-lang"
 version = "0.1.0"
 authors = ["arbaregni <jamesnsours@gmail.com>"]
 edition = "2018"

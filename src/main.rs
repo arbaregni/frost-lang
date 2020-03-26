@@ -109,8 +109,8 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     // the defaults
     let mut args = Args {
-        in_path: String::from(r"C:\Users\james\Projects\basic-transpilation-prime\test.txt"),
-        out_path: String::from(r"C:\Users\james\Projects\basic-transpilation-prime\test.s"),
+        in_path: String::from(r"test.txt"),
+        out_path: String::from(r"test.s"),
     };
 
     Ok(args)
