@@ -1,8 +1,14 @@
-use crate::{regalloc};
+mod regalloc;
+pub use regalloc::*;
+#[macro_use] mod codegen_macros;
+
 use crate::mir::{Val, Mir, Instr, MirBlock, ExitStrategy};
 use crate::symbols::{SymbolTable};
-use crate::regalloc::{RegisterAllocation};
+use regalloc::{RegisterAllocation};
 
+const WORD_SIZE: i32 = 4;
+
+/// a struct to generate labels as we need them
 pub struct LabelMaker {
     counter: u32,
 }
@@ -16,43 +22,11 @@ impl LabelMaker {
         f!("L{num}")
     }
 }
+
 pub struct MipsProgram {
     text: String,
     reg_alloc: RegisterAllocation,
-    label_maker: LabelMaker
-}
-
-macro_rules! write_label {
-    ($prgm:expr, $label:expr) => {
-        $prgm.text.push_str(&format!("{}:\n", $label));
-    }
-}
-macro_rules! make_instr {
-    ($prgm:expr, $prefix:expr, $dest:expr, $offset:expr, ( $reg:expr )) => {
-        $prgm.text.push_str(&format!("    {} {},{}({})\n", $prefix, $dest, $offset, $reg))
-    };
-    ($prgm:expr, $prefix:expr) => {
-        $prgm.text.push_str(&format!("    {}\n", $prefix))
-    };
-    ($prgm:expr, $prefix:expr, $reg:expr) => {
-        $prgm.text.push_str(&format!("    {} {}\n", $prefix, $reg))
-    };
-    ($prgm:expr, $prefix:expr, $dest:expr, $reg:expr) => {
-        $prgm.text.push_str(&format!("    {} {},{}\n", $prefix, $dest,$reg))
-    };
-    ($prgm:expr, $prefix:expr, $dest:expr, $reg0:expr, $reg1:expr) => {
-        $prgm.text.push_str(&format!("    {} {},{},{}\n", $prefix, $dest, $reg0, $reg1))
-    };
-}
-
-macro_rules! set_reg {
-    ($prgm:expr, $reg:expr, $val:expr) => {
-        match $val {
-            Val::Varbl(varbl) => make_instr!($prgm, "move", $reg, $prgm.reg_alloc.get(varbl)),
-            Val::Const(n) => make_instr!($prgm, "li", $reg, *n),
-            Val::Nothing => { /* no op */ },
-        }
-    }
+    label_maker: LabelMaker,
 }
 
 impl MipsProgram {
@@ -60,10 +34,10 @@ impl MipsProgram {
         Self {
             text: String::new(),
             reg_alloc,
-            label_maker: LabelMaker::new()
+            label_maker: LabelMaker::new(),
         }
     }
-    fn pre_process(&mut self, mir: &Mir, _symbols: &SymbolTable) {
+    fn pre_process(&mut self, _mir: &Mir, _symbols: &SymbolTable) {
         // prepare for the main function
         self.text.push_str("    .text\n    .globl main\n");
     }
@@ -85,6 +59,10 @@ impl MipsProgram {
                     (val, Nothing) | (Nothing, val) => {
                         set_reg!(self, self.reg_alloc.get(dest), val);
                     }
+
+                    #[allow(unreachable_patterns)]
+                    (_, Varbl(_)) | (_, Const(_)) => { unreachable!("these should be covered by previous cases.\
+                                                                     intelliJ bug: the match *is* exhaustive.")}
                 }
             }
             Sub{dest, a, b} => {
@@ -104,7 +82,9 @@ impl MipsProgram {
                     (Const(n), Const(m)) => {
                         make_instr!(self, "li", self.reg_alloc.get(dest), n - m);
                     }
-                    (_, Nothing) | (Nothing, _) => unreachable!(),
+                    (_, Nothing) => { /* nothing to do */ }
+                    (_, Varbl(_)) | (_, Const(_)) => { unreachable!("these should be covered by previous cases.\
+                                                                     intellIJ bug: the match *is* exhaustive.")}
                 }
             }
             Equals{dest, a, b} => {
@@ -122,8 +102,15 @@ impl MipsProgram {
                 set_reg!(self, "$a0", val);
                 make_instr!(self, "syscall");
             }
-            _ => {
-                println!("warning! unrecognized instr {:?}", instr);
+            Save { varbl } => {
+                let loc = self.reg_alloc.get(varbl);
+                make_instr!(self, "addi", "$sp", -WORD_SIZE);
+                make_instr!(self, "sw", loc, 0, ( "$sp" ));
+            }
+            Restore { varbl } => {
+                let loc = self.reg_alloc.get(varbl);
+                make_instr!(self, "addi", "$sp", WORD_SIZE);
+                make_instr!(self, "lw", loc, 0, ( "$sp" ));
             }
         }
     }
@@ -162,12 +149,14 @@ pub fn generate_mips(mir: &Mir, symbols: &SymbolTable) -> String
     println!("{}", reg_alloc);
     let mut prgm = MipsProgram::new(reg_alloc);
     prgm.pre_process(mir, symbols);
-    for (block, edges) in mir.blocks() {
+    for block in mir.blocks() {
         // print the label
         let lbl = block.label(&mut prgm.label_maker);
         write_label!(prgm, lbl);
         // compile every instruction in this block
-        for instr in block.iter() { prgm.compile_instr(instr); }
+        for instr in block.iter() {
+            prgm.compile_instr(instr);
+        }
 
         prgm.exit_block(mir, block);
     }

@@ -13,7 +13,6 @@ mod scope;
 mod mirgen;
 mod mir;
 mod codegen;
-mod regalloc;
 
 use std::fs;
 use crate::symbols::SymbolTable;

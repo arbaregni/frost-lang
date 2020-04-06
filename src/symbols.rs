@@ -95,16 +95,6 @@ impl SymbolTable {
         let rc = self.fun_table.get(symbol_id)?;
         Some(rc.as_ref())
     }
-    /// Iterate over all the functions which need to be compiled to subroutines
-    pub fn subroutine_iter(&self) -> impl Iterator<Item = (SymbolId, Rc<FunDec>)> + '_ {
-        self.fun_table.iter().filter_map(|(symbol_id, fun_dec_rc)| {
-            if fun_dec_rc.has_mir() {
-                Some((*symbol_id, Rc::clone(fun_dec_rc)))
-            } else {
-                None
-            }
-        })
-    }
     pub fn quant_entry(&'_ mut self, ident: &str, scope_id: ScopeId) -> Entry<'_, SymbolId, Quantified> {
         let id = self.scope_table.get_id(ident, scope_id).expect(&f!("unbound symbol {ident} in scope {scope_id}"));
         self.quantified.entry(id.clone())

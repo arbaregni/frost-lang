@@ -64,6 +64,6 @@ impl FunDec {
 pub struct SubroutineInfo {
     pub start: NodeIndex,
     pub end: NodeIndex,
-    pub args: Vec<mir::VarblId>,
+    pub params: Vec<mir::VarblId>,
     pub return_val: mir::Val,
 }

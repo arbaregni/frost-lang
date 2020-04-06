@@ -1,12 +1,12 @@
-use crate::symbols::SymbolId;
-use petgraph::graph::{Graph, NodeIndex, Edges};
-use petgraph::{Directed, Direction};
+use petgraph::graph::{Graph, NodeIndex};
+use petgraph::{Directed};
 use std::fmt::{Formatter, Error};
 use std::collections::HashSet;
 use std::cmp::Ordering;
 use once_cell::unsync::OnceCell;
-use crate::codegen::LabelMaker;
+use crate::codegen::{LabelMaker, Coloring};
 
+/// the id to keep track of variables in mir code
 #[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, Ord, PartialOrd)]
 pub struct VarblId(pub u32);
 
@@ -48,31 +48,31 @@ pub enum Instr {
     Sub     {dest: VarblId, a: Val, b: Val},      // store a - b in dest
     Equals  {dest: VarblId, a: Val, b: Val},      // store a == b in dest
     Set     {dest: VarblId, expr: Val},           // store expr in dest
-    CallRtn (SymbolId),                       // call the function at the specified symbol id
-    Print   (Val),                            // prints out the value
+    Print   (Val),                                // prints out the value
+    Save    {varbl: VarblId },                    // saves the value in memory. spill_id is shared by corresponding saves/restores
+    Restore {varbl: VarblId },                    // restores the value from memory
 }
 impl Instr {
     /// Call `closure` on every variable within this instruction.
-    /// The second parameter is true if and only if the variable is set
+    /// The second parameter is true if and only if the variable is set (written to) by this instruction.
     pub fn visit_variables<F>(&self, closure: &mut F)
         where F: FnMut(&VarblId, bool)
     {
         match self {
             Instr::Add { dest, a, b } | Instr::Sub { dest, a, b } | Instr::Equals { dest, a, b } => {
-                closure(dest, true);
+                closure(dest, true); // dest is set to a + b
                 a.visit_variables(closure);
                 b.visit_variables(closure);
             },
             Instr::Set { dest, expr } => {
-                closure(dest, true);
+                closure(dest, true); // dest is set to expr
                 expr.visit_variables(closure);
             },
             Instr::Print(val) => {
-                println!("visiting print {}", val);
                 val.visit_variables(closure);
             },
-            Instr::CallRtn(_) => {},
-
+            Instr::Save    { varbl } => closure(varbl, false), // the value is read into memory
+            Instr::Restore { varbl } => closure(varbl, true), // the value is overwritten from memory
         }
     }
 }
@@ -83,19 +83,18 @@ impl std::fmt::Display for Instr {
             Instr::Sub     { dest, a, b } => write!(f, "{} = {} - {}", dest, a, b),
             Instr::Equals  { dest, a, b } => write!(f, "{} = ({} == {})", dest, a, b),
             Instr::Set     { dest, expr } => write!(f, "{} = {}", dest, expr),
-            Instr::CallRtn (symbol_id) => write!(f, "call rtn {}", symbol_id),
             Instr::Print(expr) => write!(f, "print {}", expr),
+            Instr::Save    { varbl } => write!(f, "save {}", varbl),
+            Instr::Restore { varbl } => write!(f, "restore {}", varbl),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum EdgeInfo {
-    Unit,
-}
+pub struct EdgeInfo;
 impl EdgeInfo {
     pub fn new() -> EdgeInfo {
-        EdgeInfo::Unit
+        EdgeInfo{}
     }
 }
 
@@ -125,19 +124,32 @@ pub enum ExitStrategy {
 #[derive(Debug, Clone)]
 pub struct MirBlock {
     maybe_label: OnceCell<String>,
+    depth: usize, // the nexting depth of this block
     instrs: Vec<Instr>,
     exit_strategy: ExitStrategy,
 }
 impl MirBlock {
-    pub fn new() -> MirBlock {
+    pub fn with_depth(depth: usize) -> MirBlock {
         MirBlock {
             maybe_label: OnceCell::new(),
+            depth,
             instrs: vec![],
             exit_strategy: ExitStrategy::Undefined
         }
     }
+    pub fn create_block(mir_graph: &mut MirGraph, depth: usize) -> NodeIndex {
+        let block = MirBlock::with_depth(depth);
+        mir_graph.add_node(block)
+    }
+    pub fn create_block_at_same_depth(mir_graph: &mut MirGraph, curr_block: &NodeIndex) -> NodeIndex {
+        let depth = mir_graph[*curr_block].depth;
+        let block = MirBlock::with_depth(depth);
+        let idx = mir_graph.add_node(block);
+        //mir_graph.add_edge(*curr_block, idx, EdgeInfo::new());
+        idx
+    }
     pub fn entry_point() -> MirBlock {
-        let this = MirBlock::new();
+        let this = MirBlock::with_depth(0);
         this.maybe_label.set(String::from("main")).unwrap();
         this
     }
@@ -149,6 +161,10 @@ impl MirBlock {
         }
         self.maybe_label.get().unwrap().as_str()
     }
+    /// increment the nesting depth of this block
+    pub fn increment_depth(&mut self) {
+        self.depth += 1;
+    }
     pub fn set_exit_strategy(&mut self, strategy: ExitStrategy) {
         self.exit_strategy = strategy;
     }
@@ -157,9 +173,8 @@ impl MirBlock {
     pub fn iter(&self) -> impl Iterator<Item = &Instr> { self.instrs.iter() }
     pub fn get(&self, idx: usize) -> Option<&Instr> { self.instrs.get(idx) }
     pub fn len(&self) -> usize { self.instrs.len() }
-
-
 }
+
 impl std::fmt::Display for MirBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         for instr in self.instrs.iter() {
@@ -197,6 +212,7 @@ impl std::cmp::PartialOrd for InstrIndex {
 #[derive(Debug)]
 pub struct Mir {
     pub graph: MirGraph,         // the call flow graph
+    pub precoloring: Coloring,    // values whose registers are already decided
     pub entry_block: NodeIndex, // the entry block of the program
     pub exit_block: NodeIndex, // the exit block of the program
     pub ordering: Vec<NodeIndex>,
@@ -204,9 +220,9 @@ pub struct Mir {
 impl Mir {
     /// Construct a Mir object from the graph
     /// Performs some analysis on the graph, such as (TODO: reducing) and sorting
-    pub fn from(graph: MirGraph, entry_block: NodeIndex, exit_block: NodeIndex) -> Mir {
+    pub fn from(graph: MirGraph, precoloring: Coloring, entry_block: NodeIndex, exit_block: NodeIndex) -> Mir {
         let mut this = Mir {
-            graph, entry_block, exit_block, ordering: Vec::new(),
+            graph, precoloring, entry_block, exit_block, ordering: Vec::new(),
         };
         this.sort_blocks();
         this
@@ -243,12 +259,11 @@ pub struct MirBlocks<'a> {
     idx: usize,
 }
 impl <'a> std::iter::Iterator for MirBlocks<'a> {
-    type Item = (&'a MirBlock, Edges<'a, EdgeInfo, Directed>);
+    type Item = &'a MirBlock;
     fn next(&mut self) -> Option<Self::Item> {
         let node_idx = self.mir.ordering.get(self.idx)?;
         self.idx += 1;
-        let edges = self.mir.graph.edges_directed(*node_idx, Direction::Outgoing);
-        Some( (&self.mir.graph[*node_idx], edges) )
+        Some( &self.mir.graph[*node_idx] )
     }
 }
 
