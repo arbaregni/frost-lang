@@ -115,29 +115,55 @@ impl MipsProgram {
         }
     }
     fn exit_block(&mut self, mir: &Mir, block: &MirBlock) {
+        let next_block;
         match block.exit_strategy() {
-            ExitStrategy::Undefined => { /* nothing to do: we just hope that the Mir::Instr's handle it, or that the fall through is correct */ },
-            ExitStrategy::Call(idx) => make_instr!(self, "jal", mir.graph[idx].label(&mut self.label_maker)),
-            ExitStrategy::Ret => make_instr!(self, "jr", "$ra"), // return to caller
-            ExitStrategy::AlwaysGoto(idx) => make_instr!(self, "j", mir.graph[idx].label(&mut self.label_maker)),
+            ExitStrategy::Undefined => {
+                // nothing to do: we just hope that the Mir::Instr's handle it, or that the fall through is correct
+                return;
+            },
+            ExitStrategy::Ret => {
+                // return to caller
+                make_instr!(self, "jr", "$ra");
+                return;
+            },
+            ExitStrategy::AlwaysGoto(idx) => {
+                next_block = idx;
+            },
+            ExitStrategy::Call{ subrtn, after_call } => {
+                make_instr!(self, "jal",   mir.graph[subrtn].label(&mut self.label_maker));
+                next_block = after_call;
+            },
             ExitStrategy::Branch { condition, on_zero, on_nonzero  } => {
                 match condition {
                     Val::Varbl(v) => {
-                        make_instr!(self, "beq", self.reg_alloc.get(&v), "$zero", mir.graph[on_zero].label(&mut self.label_maker));
+                        // v can take on anything: we must branch
+                        let zero_label = mir.graph[on_zero].label(&mut self.label_maker);
+                        let loc = self.reg_alloc.get(&v);
+                        make_instr!(self, "beq", loc, "$zero", zero_label);
+                        // at this point, we are on the non_zero path (if it was zero, we would have transferred control)
+                        next_block = on_nonzero;
                     },
                     Val::Const(0) => {
                         // we are going down the on_zero path
-                        make_instr!(self, "j", mir.graph[on_zero].label(&mut self.label_maker));
+                        next_block = on_zero;
                     },
                     Val::Const(_) => {
                         // we are going down the on_nonzero path
-                        make_instr!(self, "j", mir.graph[on_nonzero].label(&mut self.label_maker));
+                        next_block = on_nonzero;
                     },
                     Val::Nothing => unreachable!(),
                 }
-
             },
         }
+        // figure out if we need to jump to get to the next block,
+        // or if we can just carry on sequentially
+        if true { // TODO: find an actual way to test this
+            let label = mir.graph[next_block].label(&mut self.label_maker);
+            make_instr!(self, "j", label);
+        } else {
+
+        }
+
     }
 }
 

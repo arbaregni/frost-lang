@@ -132,18 +132,18 @@ impl Ast {
                     // overwrite the value with the argument
                     mir_graph[*curr_block].push(Instr::Set { dest: *subrtn_param, expr: arg_val });
                 }
+                // jump back to a new block after the subroutine finishes
+                let after_call = MirBlock::create_block_at_same_depth(mir_graph, curr_block);
+
                 // jump to the body of the subroutine
                 mir_graph.add_edge(*curr_block, subrtn.start, EdgeInfo::new());
-                mir_graph[*curr_block].set_exit_strategy(ExitStrategy::Call(subrtn.start));
+                mir_graph[*curr_block].set_exit_strategy(ExitStrategy::Call{subrtn: subrtn.start, after_call});
+                // the subroutine needs an edge from its end to where we resume control.
+                // the exit strategy should already be set
+                mir_graph.add_edge(subrtn.end, after_call, EdgeInfo::new());
 
-                // because we are running through the sub routine again
-                // we increase the nesting depth of everything in the subroutine,
-                // increment_depths(mir_graph, )
-
-                // jump back to a new block after the subroutine finishes
-                *curr_block = MirBlock::create_block_at_same_depth(mir_graph, curr_block);
-                // find_or_create_subroutine set the correct the exit strategy for subrtn.end
-                mir_graph.add_edge(subrtn.end, *curr_block, EdgeInfo::new());
+                // now that we're done with the call, the current block should move
+                *curr_block = after_call;
 
                 // reload the return address
                 mir_graph[*curr_block].push(Instr::Restore{varbl: ctx.return_addr });

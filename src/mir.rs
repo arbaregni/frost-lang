@@ -111,12 +111,12 @@ pub type MirGraph = Graph<MirBlock, EdgeInfo, Directed>;
 pub enum ExitStrategy {
     /// we don't know what will happen when we reach the end of the block
     Undefined,
-    /// we are entering a subroutine
-    Call(NodeIndex),
     /// we will return from the subroutine at the end of the block
     Ret,
     /// we are guaranteed to go to this block
     AlwaysGoto(NodeIndex),
+    /// we are entering a subroutine: jump there, then return to the next block after the call returns
+    Call{subrtn: NodeIndex, after_call: NodeIndex},
     /// branch based on some value
     Branch{ condition: Val, on_zero: NodeIndex, on_nonzero: NodeIndex}
 }
@@ -224,6 +224,7 @@ impl Mir {
         let mut this = Mir {
             graph, precoloring, entry_block, exit_block, ordering: Vec::new(),
         };
+        //TODO: simplify the graph
         this.sort_blocks();
         this
     }
