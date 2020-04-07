@@ -133,9 +133,13 @@ fn recreate_node(conflict_graph: &mut ConflictGraph, node: VarblId, neighbors: V
 /// The heuristic for the cost it would take to spill the given variable
 /// Uses the cost of spilling / degree of node
 fn spill_cost(varbl: VarblId, _live_range: &Interval, conflict_graph: &ConflictGraph, _mir: &Mir) -> f32 {
-    let degree = conflict_graph.neighbors(varbl).count() as f32;
-    // TODO: use nesting depth heuristic
-    10000. / degree
+    let degree = conflict_graph.neighbors(varbl).count();
+
+    let cost = 0;
+
+
+
+    cost as f32 / degree as f32
 }
 
 /// Assign a color to `node_idx` by assigning it the smallest color possible

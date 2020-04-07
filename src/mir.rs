@@ -1,10 +1,11 @@
 use petgraph::graph::{Graph, NodeIndex};
-use petgraph::{Directed};
+use petgraph::{Directed, Direction};
 use std::fmt::{Formatter, Error};
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::cmp::Ordering;
 use once_cell::unsync::OnceCell;
 use crate::codegen::{LabelMaker, Coloring};
+use petgraph::visit::EdgeRef;
 
 /// the id to keep track of variables in mir code
 #[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, Ord, PartialOrd)]
@@ -177,9 +178,11 @@ impl MirBlock {
 
 impl std::fmt::Display for MirBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        writeln!(f, "(label = {:?}, depth = {})", self.maybe_label, self.depth)?;
         for instr in self.instrs.iter() {
             writeln!(f, "{}", instr)?;
         }
+        writeln!(f, "{:?}", self.exit_strategy)?;
         Ok(())
     }
 }
@@ -225,6 +228,7 @@ impl Mir {
             graph, precoloring, entry_block, exit_block, ordering: Vec::new(),
         };
         //TODO: simplify the graph
+        this.set_nesting_depths();
         this.sort_blocks();
         this
     }
@@ -242,6 +246,46 @@ impl Mir {
                 todo.push(neighbor);
             }
         }
+    }
+    /// set each of the node's nesting depths
+    /// this is the number of cycles its a part of
+    pub fn set_nesting_depths(&mut self) {
+        // mir: the mir struct we are using
+        // path: a vector of node indices in the order that we have visited them
+        // visited: maps node indices --> path indices
+        fn helper(mir: &mut Mir, curr_block: NodeIndex, path: &mut Vec<NodeIndex>, visited: &mut HashMap<NodeIndex, usize>) {
+            // do cycle detection before visiting curr_block
+            if let Some(&cycle_start) = visited.get(&curr_block) {
+                // we already visited curr_block
+                // so this is a cycle: increment the depths of everything in it
+                for path_idx in cycle_start..path.len() {
+                    mir.graph[path[path_idx]].increment_depth();
+                }
+                // nothing else to do here
+                return;
+            }
+
+            // now we can visit this node
+            visited.insert(curr_block, path.len());
+            path.push(curr_block);
+
+            // no we visit each of our children
+            let next_blocks = mir.graph.edges_directed(curr_block, Direction::Outgoing)
+                .map(|edge| edge.target())
+                .collect::<Vec<_>>();
+
+            for block in next_blocks {
+                helper(mir, block, path, visited);
+            }
+
+            // we are done visiting this node
+            visited.remove(&curr_block).expect("could not remove current block from visited");
+            path.pop().expect("could not remove current block from path");
+        }
+
+        let mut path = vec![];
+        let mut visited = HashMap::new();
+        helper(self, self.entry_block, &mut path, &mut visited);
     }
     pub fn get(&self, idx: InstrIndex) -> Option<&Instr> {
         let node_idx = *self.ordering.get(idx.outer)?;
