@@ -70,8 +70,11 @@ impl MipsProgram {
                     (Varbl(a), Varbl(b)) => {
                         make_instr!(self, "sub", self.reg_alloc.get(dest), self.reg_alloc.get(a), self.reg_alloc.get(b));
                     }
-                    (Varbl(a), Const(n)) => {
+                    (Varbl(a), Const(n)) if *n != 0 => {
                         make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), -n);
+                    }
+                    (val, Const(0)) => {
+                        set_reg!(self, self.reg_alloc.get(dest), val);
                     }
                     (Const(n), Varbl(a)) => {
                         // get c - v
@@ -88,10 +91,20 @@ impl MipsProgram {
                 }
             }
             Equals{dest, a, b} => {
-                // first, take the difference of a and b, then we will negate it
-                self.compile_instr(&Instr::Sub{dest: *dest, a: *a, b: *b});
                 let loc = self.reg_alloc.get(dest);
-                make_instr!(self, "nor", loc, loc, loc);
+                // first, take the xor of a and b, then we will negate it
+                match (a, b) {
+                    (Varbl(a), Varbl(b)) => {
+                        make_instr!(self, "seq", loc, self.reg_alloc.get(a), self.reg_alloc.get(b))
+                    },
+                    (Varbl(v), Const(c)) | (Const(c), Varbl(v)) => {
+                        make_instr!(self, "seq", loc, self.reg_alloc.get(v), c)
+                    },
+                    (Const(n), Const(m)) => {
+                        make_instr!(self, "li", loc, if n == m { 1 } else { 0 });
+                    }
+                    (Nothing, _) | (_, Nothing) => {}
+                }
             }
             Set{dest, expr} => {
                 set_reg!(self, self.reg_alloc.get(dest), expr)
@@ -109,8 +122,8 @@ impl MipsProgram {
             }
             Restore { varbl } => {
                 let loc = self.reg_alloc.get(varbl);
-                make_instr!(self, "addi", "$sp", WORD_SIZE);
                 make_instr!(self, "lw", loc, 0, ( "$sp" ));
+                make_instr!(self, "addi", "$sp", WORD_SIZE);
             }
         }
     }

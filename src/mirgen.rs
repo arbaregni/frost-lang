@@ -145,12 +145,13 @@ impl Ast {
                 // now that we're done with the call, the current block should move
                 *curr_block = after_call;
 
-                // reload the return address
-                mir_graph[*curr_block].push(Instr::Restore{varbl: ctx.return_addr });
+
                 // now we reload all of the subroutine's parameters
-                for subrtn_param in subrtn.params.iter() {
+                for subrtn_param in subrtn.params.iter().rev() {
                     mir_graph[*curr_block].push(Instr::Restore{varbl: *subrtn_param });
                 }
+                // reload the return address
+                mir_graph[*curr_block].push(Instr::Restore{varbl: ctx.return_addr });
 
                 // we can simply return the resultant value of the subroutine call
                 subrtn.return_val
@@ -177,13 +178,6 @@ impl AstBlock {
     }
 }
 
-fn increment_depths(mir_graph: &mut MirGraph, curr_block: NodeIndex, end_block: NodeIndex) {
-    mir_graph[curr_block].increment_depth();
-
-    if curr_block == end_block { return; }
-
-
-}
 
 /// Returns the info we need to call the specified subroutine
 /// creating the blocks if necessary
