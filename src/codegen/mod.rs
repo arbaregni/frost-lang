@@ -46,83 +46,91 @@ impl MipsProgram {
         use Val::*;
         match instr {
             Add{dest, a, b} => {
+                let rd = get_reg!(self, dest);
                 match (a, b) {
                     (Varbl(a), Varbl(b)) => {
-                        make_instr!(self, "add", self.reg_alloc.get(dest), self.reg_alloc.get(a), self.reg_alloc.get(b));
+                        let rs = get_reg!(self, a);
+                        let rt = get_reg!(self, b);
+                        make_instr!(self, "add", rd, rs, rt);
+                    }
+                    (val, Const(0)) | (Const(0), val) => {
+                        set_reg!(self, rd, val);
                     }
                     (Varbl(a), Const(n)) | (Const(n), Varbl(a)) => {
-                        make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), n);
+                        let rs = get_reg!(self, a);
+                        make_instr!(self, "addi", rd, rs, n);
                     }
                     (Const(n), Const(m)) => {
-                        make_instr!(self, "li", self.reg_alloc.get(dest), n + m);
+                        make_instr!(self, "li", rd, n + m);
                     }
-                    (val, Nothing) | (Nothing, val) => {
-                        set_reg!(self, self.reg_alloc.get(dest), val);
-                    }
-
-                    #[allow(unreachable_patterns)]
-                    (_, Varbl(_)) | (_, Const(_)) => { unreachable!("these should be covered by previous cases.\
-                                                                     intelliJ bug: the match *is* exhaustive.")}
+                    _ => unreachable!("invalid inputs to Add: a = {:?}, b = {:?}", a, b)
                 }
             }
             Sub{dest, a, b} => {
+                let rd = get_reg!(self, dest);
                 match (a, b) {
                     (Varbl(a), Varbl(b)) => {
-                        make_instr!(self, "sub", self.reg_alloc.get(dest), self.reg_alloc.get(a), self.reg_alloc.get(b));
-                    }
-                    (Varbl(a), Const(n)) if *n != 0 => {
-                        make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), -n);
+                        let rs = get_reg!(self, a);
+                        let rt = get_reg!(self, b);
+                        make_instr!(self, "sub", rd, rs, rt);
                     }
                     (val, Const(0)) => {
-                        set_reg!(self, self.reg_alloc.get(dest), val);
+                        set_reg!(self, rd, val);
+                    }
+                    (Varbl(a), Const(n)) if *n != 0 => {
+                        let rs = get_reg!(self, a);
+                        make_instr!(self, "addi", rd, rs, -n);
                     }
                     (Const(n), Varbl(a)) => {
-                        // get c - v
-                        make_instr!(self, "addi", self.reg_alloc.get(dest), self.reg_alloc.get(a), -n);
-                        // find the negative
-                        make_instr!(self, "sub", self.reg_alloc.get(dest), "$zero", self.reg_alloc.get(dest));
+                        // load the constant
+                        make_instr!(self, "li", rd, n);
+                        // subtract off the second parameter
+                        let rt = get_reg!(self, a);
+                        make_instr!(self, "sub", rd, rd, rt);
                     }
                     (Const(n), Const(m)) => {
-                        make_instr!(self, "li", self.reg_alloc.get(dest), n - m);
+                        make_instr!(self, "li", rd, n - m);
                     }
-                    (_, Nothing) => { /* nothing to do */ }
-                    (_, Varbl(_)) | (_, Const(_)) => { unreachable!("these should be covered by previous cases.\
-                                                                     intellIJ bug: the match *is* exhaustive.")}
+                    _ => unreachable!("invalid inputs to Sub: a = {:?}, b = {:?}", a, b)
                 }
             }
             Equals{dest, a, b} => {
-                let loc = self.reg_alloc.get(dest);
-                // first, take the xor of a and b, then we will negate it
+                let rd = get_reg!(self, dest);
                 match (a, b) {
                     (Varbl(a), Varbl(b)) => {
-                        make_instr!(self, "seq", loc, self.reg_alloc.get(a), self.reg_alloc.get(b))
+                        let rs = get_reg!(self, a);
+                        let rt = get_reg!(self, b);
+                        make_instr!(self, "seq", rd, rs, rt)
                     },
-                    (Varbl(v), Const(c)) | (Const(c), Varbl(v)) => {
-                        make_instr!(self, "seq", loc, self.reg_alloc.get(v), c)
+                    (Varbl(v), Const(imm)) | (Const(imm), Varbl(v)) => {
+                        let rs = get_reg!(self, v);
+                        make_instr!(self, "seq", rd, rs, imm)
                     },
                     (Const(n), Const(m)) => {
-                        make_instr!(self, "li", loc, if n == m { 1 } else { 0 });
+                        let imm = if n == m { 1 } else { 0 };
+                        make_instr!(self, "li", rd, imm);
                     }
-                    (Nothing, _) | (_, Nothing) => {}
+                    _ => unreachable!("invalid inputs to Equals: a = {:?}, b = {:?}", a, b)
                 }
             }
             Set{dest, expr} => {
-                set_reg!(self, self.reg_alloc.get(dest), expr)
+                let rd = get_reg!(self, dest);
+                set_reg!(self, rd, expr)
             }
             Print(val) => {
                 // assume that val is an integer for now
-                make_instr!(self, "li", "$v0", "1"); // prepare for syscall 1 (print int)
-                set_reg!(self, "$a0", val);
-                make_instr!(self, "syscall");
+                make_instr!(self, "li", "$v0", 1);     // prepare for syscall 1 (print int)
+                set_reg!(self, "$a0", val);   // load in our argument
+                make_instr!(self, "syscall"); // make the syscall
             }
             Push(varbl) => {
-                let loc = self.reg_alloc.get(varbl);
+                let r = get_reg!(self, varbl);
                 make_instr!(self, "addi", "$sp", -WORD_SIZE);
-                make_instr!(self, "sw", loc, 0, ( "$sp" ));
+                make_instr!(self, "sw", r, 0, ( "$sp" ));
             }
             Pop(varbl) => {
-                let loc = self.reg_alloc.get(varbl);
-                make_instr!(self, "lw", loc, 0, ( "$sp" ));
+                let r = get_reg!(self, varbl);
+                make_instr!(self, "lw", r, 0, ( "$sp" ));
                 make_instr!(self, "addi", "$sp", WORD_SIZE);
             }
         }
