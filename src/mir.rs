@@ -2,7 +2,6 @@ use petgraph::graph::{Graph, NodeIndex};
 use petgraph::{Directed, Direction};
 use std::fmt::{Formatter, Error};
 use std::collections::{HashSet, HashMap};
-use std::cmp::Ordering;
 use once_cell::unsync::OnceCell;
 use crate::codegen::{LabelMaker, Coloring};
 use petgraph::visit::EdgeRef;
@@ -11,9 +10,15 @@ use petgraph::visit::EdgeRef;
 #[derive(Debug, Eq, PartialEq, Hash, Copy, Clone, Ord, PartialOrd)]
 pub struct VarblId(pub u32);
 
+pub const RETURN_ADDR_VARBL: VarblId = VarblId(0);
+
 impl std::fmt::Display for VarblId {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        write!(f, "V{}", self.0)
+        if *self == RETURN_ADDR_VARBL {
+            write!(f, "return addr")
+        } else {
+            write!(f, "V{}", self.0)
+        }
     }
 }
 
@@ -121,6 +126,20 @@ pub enum ExitStrategy {
     /// branch based on some value
     Branch{ condition: Val, on_zero: NodeIndex, on_nonzero: NodeIndex}
 }
+impl ExitStrategy {
+    pub fn visit_variables<F>(&self, closure: &mut F)
+    where F: FnMut(&VarblId, bool)
+    {
+        match self {
+            ExitStrategy::Undefined | ExitStrategy::AlwaysGoto(_) => { /* doesn't use or define any variables */ },
+
+            ExitStrategy::Ret => closure(&RETURN_ADDR_VARBL, false), // returning from a function accesses the return address
+            ExitStrategy::Call { .. } => closure(&RETURN_ADDR_VARBL, true), // calling a function sets the return address
+
+            ExitStrategy::Branch { condition, .. } => condition.visit_variables(closure),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MirBlock {
@@ -182,9 +201,11 @@ impl MirBlock {
         Some(self.debug_tag.as_str())
     }
 
+    /// our exit strategy (default is ExitStrategy::Undefined)
     pub fn set_exit_strategy(&mut self, strategy: ExitStrategy) {
         self.exit_strategy = strategy;
     }
+    /// return a clone of our exit strategy
     pub fn exit_strategy(&self) -> ExitStrategy { self.exit_strategy.clone() }
 
     pub fn push(&mut self, instr: Instr) { self.instrs.push(instr); }
@@ -201,31 +222,6 @@ impl std::fmt::Display for MirBlock {
         }
         writeln!(f, "{:?}", self.exit_strategy)?;
         Ok(())
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct InstrIndex {
-    outer: usize, // indexes into the ordering to get the node index
-    inner: usize, // indexes into the mir block
-}
-
-impl InstrIndex {
-    pub fn new(outer: usize, inner: usize) -> InstrIndex {
-        InstrIndex { outer, inner }
-    }
-}
-impl std::cmp::Ord for InstrIndex {
-    fn cmp(&self, other: &InstrIndex) -> Ordering {
-        match self.outer.cmp(&other.outer) {
-            Ordering::Equal => self.inner.cmp(&other.inner),
-            ord => ord
-        }
-    }
-}
-impl std::cmp::PartialOrd for InstrIndex {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
     }
 }
 
@@ -304,15 +300,8 @@ impl Mir {
         let mut visited = HashMap::new();
         helper(self, self.entry_block, &mut path, &mut visited);
     }
-    pub fn get(&self, idx: InstrIndex) -> Option<&Instr> {
-        let node_idx = *self.ordering.get(idx.outer)?;
-        self.graph[node_idx].get(idx.inner)
-    }
     pub fn blocks(&self) -> MirBlocks {
         MirBlocks { mir: self, idx: 0 }
-    }
-    pub fn iter(&self) -> MirIterator {
-        MirIterator { mir: self, idx: InstrIndex::new(0, 0) }
     }
 }
 
@@ -326,28 +315,5 @@ impl <'a> std::iter::Iterator for MirBlocks<'a> {
         let node_idx = self.mir.ordering.get(self.idx)?;
         self.idx += 1;
         Some( &self.mir.graph[*node_idx] )
-    }
-}
-
-pub struct MirIterator<'a> {
-    mir: &'a Mir,
-    idx: InstrIndex,
-}
-impl <'a> std::iter::Iterator for MirIterator<'a> {
-    type Item = (&'a Instr, InstrIndex);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let instr = self.mir.get(self.idx)?;
-        let old_idx = self.idx;
-        // advance the iterator to the next instruction
-        self.idx.inner += 1;
-        let mut node_idx = self.mir.ordering[self.idx.outer];
-        while self.idx.inner >= self.mir.graph[node_idx].len() {
-            self.idx.inner = 0;
-            self.idx.outer += 1;
-            if self.idx.outer >= self.mir.ordering.len() { break; }
-            node_idx = self.mir.ordering[self.idx.outer];
-        }
-        Some( (instr, old_idx) )
     }
 }

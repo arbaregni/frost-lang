@@ -7,13 +7,12 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use crate::functions::SubroutineInfo;
 use crate::codegen::{Coloring, Color};
-use crate::codegen;
+use crate::{codegen, mir};
 
 struct Context {
     varbl_counter: u32, // a counter for generating variable id's
     varbl_table: HashMap<SymbolId, VarblId>, // maps identifiers to their corresponding varbl id's
     precoloring: Coloring,   // some values need to be in certain registers
-    return_addr: VarblId,    // the value we're using to represent the return address register
 }
 impl Context {
     pub fn new() -> Context {
@@ -21,9 +20,8 @@ impl Context {
             varbl_counter: 1, // return address is V0
             varbl_table: HashMap::new(),
             precoloring: Coloring::new(),
-            return_addr: VarblId(0),
         };
-        this.precolor(this.return_addr, codegen::RETURN_ADDR_COLOR);
+        this.precolor(mir::RETURN_ADDR_VARBL, codegen::RETURN_ADDR_COLOR);
         this
     }
     /// get the mir value associated with an identifier in the specified scope
@@ -135,7 +133,7 @@ impl Ast {
 
 
                 // we always spill the return address
-                mir_graph[*curr_block].push(Instr::Push(ctx.return_addr));
+                mir_graph[*curr_block].push(Instr::Push(mir::RETURN_ADDR_VARBL));
                 // load up the the arguments to the subroutine
                 // we spill everything to avoid clobbering previous parameters
                 // NOTE: graph coloring may later undo some of this spilling,
@@ -165,7 +163,7 @@ impl Ast {
                     mir_graph[*curr_block].push(Instr::Pop(*subrtn_param));
                 }
                 // reload the return address
-                mir_graph[*curr_block].push(Instr::Pop(ctx.return_addr));
+                mir_graph[*curr_block].push(Instr::Pop(mir::RETURN_ADDR_VARBL));
 
                 // we can simply return the resultant value of the subroutine call
                 subrtn.return_val

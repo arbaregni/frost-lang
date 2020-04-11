@@ -1,4 +1,4 @@
-use crate::mir::{Mir, VarblId, InstrIndex};
+use crate::mir::{Mir, VarblId};
 use crate::symbols::SymbolTable;
 use crate::util;
 use std::collections::HashMap;
@@ -52,6 +52,34 @@ impl std::fmt::Display for RegisterAllocation {
         Ok(())
     }
 }
+
+/// A value representing the location of a particular instruction
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub struct InstrIndex {
+    block_pos: usize,     // indexes into the ordering to get the node index
+    idx_in_block: usize, // indexes into the mir block,
+                        // OR if it's equal to the block.len(), it references the blocks exit_strategy
+}
+
+impl InstrIndex {
+    pub fn from(block_pos: usize, idx_in_block: usize) -> InstrIndex {
+        InstrIndex { block_pos, idx_in_block }
+    }
+}
+impl std::cmp::Ord for InstrIndex {
+    fn cmp(&self, other: &InstrIndex) -> Ordering {
+        match self.block_pos.cmp(&other.block_pos) {
+            Ordering::Equal => self.idx_in_block.cmp(&other.idx_in_block),
+            ord => ord
+        }
+    }
+}
+impl std::cmp::PartialOrd for InstrIndex {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// The Live Range for a variable
 /// Note: the current representation
 ///       relies on an ordering of
@@ -137,19 +165,33 @@ impl LiveRange {
     fn begin(&self) -> &InstrIndex { self.uses.first().map(|(idx, _)| idx).unwrap() }
     fn end(&self) -> &InstrIndex { self.uses.last().map(|(idx, _)| idx).unwrap() }
 }
+
+
 /// construct the set of live ranges across the entire program
 fn make_live_ranges(mir: &Mir) -> LiveRangeMap {
-    let mut intervals = HashMap::new();
-    for (instr, idx) in mir.iter() {
-        instr.visit_variables(&mut |varbl, is_def| {
-            let interval = intervals.entry(*varbl).or_insert(LiveRange::new());
-            interval.push(idx, is_def);
+    let mut ranges = HashMap::new();
+    for (block_pos, block) in mir.blocks().enumerate() {
+        // find all uses in the body of the block
+        for (idx_in_block, instr) in block.iter().enumerate() {
+            let idx = InstrIndex::from(block_pos, idx_in_block);
+            instr.visit_variables(&mut |varbl, is_def| {
+                ranges
+                    .entry(*varbl)
+                    .or_insert(LiveRange::new())
+                    .push(idx, is_def);
+            })
+        }
+        // now visit any variables which may be used by the exit_strategy
+        let idx = InstrIndex::from(block_pos, block.len());
+        block.exit_strategy().visit_variables(&mut |varbl, is_def| {
+            ranges
+                .entry(*varbl)
+                .or_insert(LiveRange::new())
+                .push(idx, is_def);
         })
     }
-    intervals
+    ranges
 }
-
-
 
 /// construct the interference graph from the set of intervals
 fn make_conflict_graph(ranges: &HashMap<VarblId, LiveRange>) -> ConflictGraph {
@@ -246,7 +288,7 @@ pub fn allocate_registers(mir: &Mir, _symbols: &SymbolTable) -> RegisterAllocati
     // generate live ranges and the conflict graph
     let ranges = make_live_ranges(mir);
     let mut conflict_graph = make_conflict_graph(&ranges);
-    println!("conflict graph: {:?}", Dot::with_config(
+    println!("conflict graph:\n{:?}", Dot::with_config(
         &conflict_graph, &[Config::EdgeNoLabel]
     ));
 
