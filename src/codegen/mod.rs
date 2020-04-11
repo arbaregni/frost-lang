@@ -119,18 +119,18 @@ impl MipsProgram {
             }
             Print(val) => {
                 // assume that val is an integer for now
-                make_instr!(self, "li", "$v0", 1);     // prepare for syscall 1 (print int)
-                set_reg!(self, "$a0", val);   // load in our argument
-                make_instr!(self, "syscall"); // make the syscall
+                make_instr!(self, "li", "$v0", 1 ; "prepare for syscall 1");
+                set_reg!(self, "$a0", val        ; "load argument");
+                make_instr!(self, "syscall");
             }
             Push(varbl) => {
                 let r = get_reg!(self, varbl);
-                make_instr!(self, "addi", "$sp", -WORD_SIZE);
+                make_instr!(self, "addi", "$sp", -WORD_SIZE  ; format!("push {} onto the stack", varbl) );
                 make_instr!(self, "sw", r, 0, ( "$sp" ));
             }
             Pop(varbl) => {
                 let r = get_reg!(self, varbl);
-                make_instr!(self, "lw", r, 0, ( "$sp" ));
+                make_instr!(self, "lw", r, 0, ( "$sp" )     ; format!("pop {} off the stack", varbl));
                 make_instr!(self, "addi", "$sp", WORD_SIZE);
             }
         }
@@ -144,14 +144,15 @@ impl MipsProgram {
             },
             ExitStrategy::Ret => {
                 // return to caller
-                make_instr!(self, "jr", "$ra");
+                make_instr!(self, "jr", "$ra" ; "exit function");
                 return;
             },
             ExitStrategy::AlwaysGoto(idx) => {
                 next_block = idx;
             },
             ExitStrategy::Call{ subrtn, after_call } => {
-                make_instr!(self, "jal",   mir.graph[subrtn].label(&mut self.label_maker));
+                let label = mir.graph[subrtn].label(&mut self.label_maker);
+                make_instr!(self, "jal", label);
                 next_block = after_call;
             },
             ExitStrategy::Branch { condition, on_zero, on_nonzero  } => {
@@ -199,7 +200,11 @@ pub fn generate_mips(mir: &Mir, symbols: &SymbolTable) -> String
     for block in mir.blocks() {
         // print the label
         let lbl = block.label(&mut prgm.label_maker);
-        write_label!(prgm, lbl);
+        if let Some(comment) = block.tag() {
+            write_label!(prgm, lbl ; comment);
+        } else {
+            write_label!(prgm, lbl);
+        }
         // compile every instruction in this block
         for instr in block.iter() {
             prgm.compile_instr(instr);

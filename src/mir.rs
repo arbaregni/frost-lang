@@ -124,6 +124,7 @@ pub enum ExitStrategy {
 
 #[derive(Debug, Clone)]
 pub struct MirBlock {
+    debug_tag: String, // useful information on where this block comes from
     maybe_label: OnceCell<String>,
     depth: usize, // the nexting depth of this block
     instrs: Vec<Instr>,
@@ -132,6 +133,7 @@ pub struct MirBlock {
 impl MirBlock {
     pub fn with_depth(depth: usize) -> MirBlock {
         MirBlock {
+            debug_tag: String::new(),
             maybe_label: OnceCell::new(),
             depth,
             instrs: vec![],
@@ -166,10 +168,25 @@ impl MirBlock {
     pub fn increment_depth(&mut self) {
         self.depth += 1;
     }
+
+    pub fn add_tag(&mut self, tag: &str) {
+        if !self.debug_tag.is_empty() {
+            self.debug_tag.push_str(", ");
+        }
+        self.debug_tag.push_str(tag);
+    }
+    pub fn tag(&self) -> Option<&str> {
+        if self.debug_tag.is_empty() {
+            return None;
+        }
+        Some(self.debug_tag.as_str())
+    }
+
     pub fn set_exit_strategy(&mut self, strategy: ExitStrategy) {
         self.exit_strategy = strategy;
     }
     pub fn exit_strategy(&self) -> ExitStrategy { self.exit_strategy.clone() }
+
     pub fn push(&mut self, instr: Instr) { self.instrs.push(instr); }
     pub fn iter(&self) -> impl Iterator<Item = &Instr> { self.instrs.iter() }
     pub fn get(&self, idx: usize) -> Option<&Instr> { self.instrs.get(idx) }

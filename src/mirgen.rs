@@ -73,7 +73,9 @@ impl Ast {
 
                 // create the starting blocks of the branches
                 let mut if_block = MirBlock::create_block_at_same_depth(mir_graph, curr_block);
+                mir_graph[if_block].add_tag("if branch");
                 let mut else_block = MirBlock::create_block_at_same_depth(mir_graph, curr_block);
+                mir_graph[else_block].add_tag("else branch");
                 mir_graph.add_edge(*curr_block, if_block, EdgeInfo::new());
                 mir_graph.add_edge(*curr_block, else_block, EdgeInfo::new());
                 // the current block goes to if_block if condition is nonzero and the else_block if it is zero
@@ -199,6 +201,9 @@ fn find_or_create_subroutine<'a>(mir_graph: &mut MirGraph, symbol_id: &SymbolId,
     }
     // create the starting block for this subroutine
     let start = MirBlock::create_block(mir_graph, 0);
+    // add some debugging information to the mir block
+    mir_graph[start].add_tag(&format!("subroutine {:?}", symbol_id));
+
     // create the dummy ending block for this routine
     let end = MirBlock::create_block_at_same_depth(mir_graph, &start);
     // extract the mir values for our parameters

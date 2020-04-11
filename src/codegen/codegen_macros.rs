@@ -2,24 +2,61 @@
 macro_rules! write_label {
     ($prgm:expr, $label:expr) => {
         $prgm.text.push_str(&format!("{}:\n", $label));
+    };
+    ($prgm:expr, $label:expr ; $comment:expr) => {
+        $prgm.text.push_str(&format!("{}:        # {}\n", $label, $comment));
     }
 }
-/// Writes the specified assembly instruction to the program text
+/// The underlying macro that actually generates the formatting code
 macro_rules! make_instr {
-    ($prgm:expr, $prefix:expr, $dest:expr, $offset:expr, ( $reg:expr )) => {
-        $prgm.text.push_str(&format!("    {} {},{}({})\n", $prefix, $dest, $offset, $reg))
+    // load/store where we reference an address offset from a register
+    ($prgm:expr, $name:expr, $dest:expr, $offset:expr, ( $reg:expr )) => {
+        $prgm.text.push_str(&format!("    {:4} {},{}({})\n", $name, $dest, $offset, $reg));
     };
-    ($prgm:expr, $prefix:expr) => {
-        $prgm.text.push_str(&format!("    {}\n", $prefix))
+    // commented version
+    ($prgm:expr, $name:expr, $dest:expr, $offset:expr, ( $reg:expr ) ; $comment:expr) => {
+        $prgm.text.push_str(&format!("    {:4} {},{}({})", $name, $dest, $offset, $reg));
+        $prgm.text.push_str(&format!("    # {}\n", $comment));
     };
-    ($prgm:expr, $prefix:expr, $reg:expr) => {
-        $prgm.text.push_str(&format!("    {} {}\n", $prefix, $reg))
+    
+    // zero argument instructions
+    ($prgm:expr, $name:expr) => {
+        $prgm.text.push_str(&format!("    {:4}\n", $name));
     };
-    ($prgm:expr, $prefix:expr, $dest:expr, $reg:expr) => {
-        $prgm.text.push_str(&format!("    {} {},{}\n", $prefix, $dest,$reg))
+    // commented version
+    ($prgm:expr, $name:expr ; $comment:expr) => {
+        $prgm.text.push_str(&format!("    {:4}", $name));
+        $prgm.text.push_str(&format!("    # {}\n", $comment));
     };
-    ($prgm:expr, $prefix:expr, $dest:expr, $reg0:expr, $reg1:expr) => {
-        $prgm.text.push_str(&format!("    {} {},{},{}\n", $prefix, $dest, $reg0, $reg1))
+    
+    // one argument instructions
+    ($prgm:expr, $name:expr, $reg:expr) => {
+        $prgm.text.push_str(&format!("    {:4} {}\n", $name, $reg));
+    };
+    // commented version
+    ($prgm:expr, $name:expr, $reg:expr ; $comment:expr) => {
+        $prgm.text.push_str(&format!("    {:4} {}", $name, $reg));
+        $prgm.text.push_str(&format!("    # {}\n", $comment));
+    };
+    
+    // two argument instructions
+    ($prgm:expr, $name:expr, $dest:expr, $reg:expr) => {
+        $prgm.text.push_str(&format!("    {:4} {},{}\n", $name, $dest,$reg));
+    };
+    // commented version
+    ($prgm:expr, $name:expr, $dest:expr, $reg:expr ; $comment:expr) => {
+        $prgm.text.push_str(&format!("    {:4} {},{}", $name, $dest,$reg));
+        $prgm.text.push_str(&format!("    # {}\n", $comment));
+    };
+
+    // three argument instructions
+    ($prgm:expr, $name:expr, $dest:expr, $reg0:expr, $reg1:expr) => {
+        $prgm.text.push_str(&format!("    {:4} {},{},{}\n", $name, $dest, $reg0, $reg1));
+    };
+    // commented version
+    ($prgm:expr, $name:expr, $dest:expr, $reg0:expr, $reg1:expr ; $comment:expr) => {
+        $prgm.text.push_str(&format!("    {:4} {},{},{}", $name, $dest, $reg0, $reg1));
+        $prgm.text.push_str(&format!("    # {}\n", $comment));
     };
 }
 
@@ -34,9 +71,24 @@ macro_rules! get_reg {
 macro_rules! set_reg {
     ($prgm:expr, $reg:expr, $val:expr) => {
         match $val {
-            Val::Varbl(varbl) => make_instr!($prgm, "move", $reg, $prgm.reg_alloc.get(varbl)),
-            Val::Const(n) => make_instr!($prgm, "li", $reg, *n),
+            Val::Varbl(varbl) => {
+                make_instr!($prgm, "move", $reg, $prgm.reg_alloc.get(varbl));
+            }
+            Val::Const(n) => {
+                make_instr!($prgm, "li", $reg, *n);
+            }
             Val::Nothing => { /* no op */ },
         }
-    }
+    };
+    ($prgm:expr, $reg:expr, $val:expr ; $comment:expr) => {
+         match $val {
+            Val::Varbl(varbl) => {
+                make_instr!($prgm, "move", $reg, $prgm.reg_alloc.get(varbl) ; $comment);
+            }
+            Val::Const(n) => {
+                make_instr!($prgm, "li", $reg, *n ; $comment);
+            }
+            Val::Nothing => { /* no op */ },
+        }
+    };
 }
