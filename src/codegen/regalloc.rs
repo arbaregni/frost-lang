@@ -71,7 +71,7 @@ impl LiveRange {
     fn new() -> LiveRange {
         LiveRange { uses: Vec::new(), chain_starts: Vec::new() }
     }
-    /// add a new instruction to the live range,
+    /// add a new instruction to the live range
     /// asserts that this function is called in the correct order
     fn push(&mut self, idx: InstrIndex, is_def: bool) {
         // a check to make sure that the new index is after the previous last instruction in the chain

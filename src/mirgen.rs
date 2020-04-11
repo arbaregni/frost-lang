@@ -133,14 +133,14 @@ impl Ast {
 
 
                 // we always spill the return address
-                mir_graph[*curr_block].push(Instr::Save { varbl: ctx.return_addr });
+                mir_graph[*curr_block].push(Instr::Push(ctx.return_addr));
                 // load up the the arguments to the subroutine
                 // we spill everything to avoid clobbering previous parameters
                 // NOTE: graph coloring may later undo some of this spilling,
                 //       so we are not too worried about performance here
                 for (subrtn_param, arg_val) in subrtn.params.iter().zip(arg_vals.into_iter()) {
                     // save the previous value of the argument
-                    mir_graph[*curr_block].push(Instr::Save { varbl: *subrtn_param });
+                    mir_graph[*curr_block].push(Instr::Push(*subrtn_param));
                     // overwrite the value with the argument
                     mir_graph[*curr_block].push(Instr::Set { dest: *subrtn_param, expr: arg_val });
                 }
@@ -160,10 +160,10 @@ impl Ast {
 
                 // now we reload all of the subroutine's parameters
                 for subrtn_param in subrtn.params.iter().rev() {
-                    mir_graph[*curr_block].push(Instr::Restore{varbl: *subrtn_param });
+                    mir_graph[*curr_block].push(Instr::Pop(*subrtn_param));
                 }
                 // reload the return address
-                mir_graph[*curr_block].push(Instr::Restore{varbl: ctx.return_addr });
+                mir_graph[*curr_block].push(Instr::Pop(ctx.return_addr));
 
                 // we can simply return the resultant value of the subroutine call
                 subrtn.return_val

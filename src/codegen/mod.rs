@@ -115,12 +115,12 @@ impl MipsProgram {
                 set_reg!(self, "$a0", val);
                 make_instr!(self, "syscall");
             }
-            Save { varbl } => {
+            Push(varbl) => {
                 let loc = self.reg_alloc.get(varbl);
                 make_instr!(self, "addi", "$sp", -WORD_SIZE);
                 make_instr!(self, "sw", loc, 0, ( "$sp" ));
             }
-            Restore { varbl } => {
+            Pop(varbl) => {
                 let loc = self.reg_alloc.get(varbl);
                 make_instr!(self, "lw", loc, 0, ( "$sp" ));
                 make_instr!(self, "addi", "$sp", WORD_SIZE);

@@ -50,8 +50,8 @@ pub enum Instr {
     Equals  {dest: VarblId, a: Val, b: Val},      // store a == b in dest
     Set     {dest: VarblId, expr: Val},           // store expr in dest
     Print   (Val),                                // prints out the value
-    Save    {varbl: VarblId },                    // saves the value in memory. spill_id is shared by corresponding saves/restores
-    Restore {varbl: VarblId },                    // restores the value from memory
+    Push    (VarblId),                            // pushes the varbl onto the stack
+    Pop     (VarblId),                            // pops the stack, writing to the given varbl
 }
 impl Instr {
     /// Call `closure` on every variable within this instruction.
@@ -72,8 +72,8 @@ impl Instr {
             Instr::Print(val) => {
                 val.visit_variables(closure);
             },
-            Instr::Save    { varbl } => closure(varbl, false), // the value is read into memory
-            Instr::Restore { varbl } => closure(varbl, true), // the value is overwritten from memory
+            Instr::Push(varbl) => closure(varbl, false), // the value is read into memory
+            Instr::Pop(varbl) => closure(varbl, true), // the value is overwritten from memory
         }
     }
 }
@@ -85,8 +85,8 @@ impl std::fmt::Display for Instr {
             Instr::Equals  { dest, a, b } => write!(f, "{} = ({} == {})", dest, a, b),
             Instr::Set     { dest, expr } => write!(f, "{} = {}", dest, expr),
             Instr::Print(expr) => write!(f, "print {}", expr),
-            Instr::Save    { varbl } => write!(f, "save {}", varbl),
-            Instr::Restore { varbl } => write!(f, "restore {}", varbl),
+            Instr::Push(varbl) => write!(f, "push {}", varbl),
+            Instr::Pop(varbl) => write!(f, "pop {}", varbl),
         }
     }
 }
