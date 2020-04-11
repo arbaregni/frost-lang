@@ -70,8 +70,6 @@ impl Ast {
             AstKind::IfStmnt{ref test, ref if_branch, ref else_branch} => {
                 // calculate the condition first
                 let condition = test.generate_instr(mir_graph, curr_block, ctx, symbols);
-                // create a place for the result when the branches join back
-                let dest = ctx.make_intermediate();
 
                 // create the starting blocks of the branches
                 let mut if_block = MirBlock::create_block_at_same_depth(mir_graph, curr_block);
@@ -85,9 +83,13 @@ impl Ast {
 
                 // create the branches
                 let if_val = if_branch.generate_instr(mir_graph, &mut if_block, ctx, symbols);
+                let else_val = else_branch.generate_instr(mir_graph, &mut else_block, ctx, symbols);
+
+                // create a place for the result when the branches join back
+                let dest = ctx.make_intermediate();
+
                 // if_block now contains the index of the last block in the if branch
                 mir_graph[if_block].push(Instr::Set{dest, expr: if_val});
-                let else_val = else_branch.generate_instr(mir_graph, &mut else_block, ctx, symbols);
                 // else_block now contains the index of the last block in the else branch
                 mir_graph[else_block].push(Instr::Set{dest, expr: else_val});
 
@@ -102,19 +104,29 @@ impl Ast {
                 Val::Varbl(dest)
             }
             AstKind::FunCall { ref func, ref args } => {
-                let dest = ctx.make_intermediate();
                 let arg_vals: Vec<Val> = args.iter().map(|arg| arg.generate_instr(mir_graph, curr_block, ctx, symbols)).collect();
                 // hard-code intrinsics for now
-                let maybe_intrinsic = match func.as_str() {
-                    "add" => Some( Instr::Add{dest, a: arg_vals[0], b: arg_vals[1]} ),
-                    "sub" => Some( Instr::Sub{dest, a: arg_vals[0], b: arg_vals[1]} ),
-                    "equals" => Some( Instr::Equals{dest, a: arg_vals[0], b: arg_vals[1]} ),
-                    "print" => Some( Instr::Print(arg_vals[0]) ),
-                    _ => None,
-                };
-                if let Some(instr) = maybe_intrinsic {
-                    mir_graph[*curr_block].push(instr);
-                    return Val::Varbl(dest);
+                match func.as_str() {
+                    "add" => {
+                        let dest = ctx.make_intermediate();
+                        mir_graph[*curr_block].push(Instr::Add{dest, a: arg_vals[0], b: arg_vals[1]});
+                        return Val::Varbl(dest);
+                    }
+                    "sub" => {
+                        let dest = ctx.make_intermediate();
+                        mir_graph[*curr_block].push(Instr::Sub{dest, a: arg_vals[0], b: arg_vals[1]});
+                        return Val::Varbl(dest);
+                    }
+                    "equals" => {
+                        let dest = ctx.make_intermediate();
+                        mir_graph[*curr_block].push(Instr::Equals{dest, a: arg_vals[0], b: arg_vals[1]});
+                        return Val::Varbl(dest);
+                    }
+                    "print" => {
+                        mir_graph[*curr_block].push(Instr::Print(arg_vals[0]));
+                        return Val::Nothing;
+                    }
+                    _ => { /* do nothing */ }
                 }
                 let symbol_id = *symbols.scope_table.get_id(func, self.scope_id).expect(&f!("unbound function `{func}`"));
                 let subrtn = find_or_create_subroutine(mir_graph, &symbol_id, ctx, symbols);
@@ -177,8 +189,6 @@ impl AstBlock {
         readable
     }
 }
-
-
 /// Returns the info we need to call the specified subroutine
 /// creating the blocks if necessary
 fn find_or_create_subroutine<'a>(mir_graph: &mut MirGraph, symbol_id: &SymbolId, ctx: &mut Context, symbols: &'a SymbolTable) -> &'a SubroutineInfo {
