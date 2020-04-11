@@ -7,6 +7,7 @@ use petgraph::dot::{Dot, Config};
 use petgraph::{Undirected};
 use petgraph::graphmap::GraphMap;
 use std::fmt::{Formatter, Error};
+use std::cmp::Ordering;
 
 // there are 24 registers that we care about allocating
 const MIPS_NUM_REGISTERS: usize = 24;
@@ -24,7 +25,11 @@ const MIPS_REGISTERS: [&'static str; MIPS_NUM_REGISTERS]
 
 pub type Color = u8;
 pub type Coloring = HashMap<VarblId, Color>;
-type ConflictGraph = GraphMap<VarblId, (), Undirected>;
+
+type InstrSpan = (InstrIndex, InstrIndex);
+type ConflictGraph = GraphMap<VarblId, InstrSpan, Undirected>;
+
+type LiveRangeMap = HashMap<VarblId, LiveRange>;
 
 // the index into MIPS_REGISTERS keeps register "$ra" at index 22
 pub const RETURN_ADDR_COLOR: Color = 22;
@@ -54,35 +59,91 @@ impl std::fmt::Display for RegisterAllocation {
 ///       established.
 #[derive(Debug)]
 struct LiveRange {
-
-    begin: InstrIndex,
-    end: InstrIndex,
+    // an ordered vector of instructions
+    // tuples are indices where they are found and a bool indicating if the variable is defined (or else, it's just accessed)
+    uses: Vec<(InstrIndex, bool)>,
+    // indices of where defines are in the uses vector
+    // intuitively, this starts a def-use chain
+    chain_starts: Vec<usize>,
 }
 impl LiveRange {
-    fn new(begin: InstrIndex, end: InstrIndex) -> LiveRange {
-        LiveRange { begin, end }
+    /// create an empty live range
+    fn new() -> LiveRange {
+        LiveRange { uses: Vec::new(), chain_starts: Vec::new() }
     }
-    fn expand(&mut self, idx: InstrIndex) {
-        if idx < self.begin {
-            self.begin = idx;
+    /// add a new instruction to the live range,
+    /// asserts that this function is called in the correct order
+    fn push(&mut self, idx: InstrIndex, is_def: bool) {
+        // a check to make sure that the new index is after the previous last instruction in the chain
+        assert!(self.uses.last().map(|(tail, _)| *tail <= idx).unwrap_or(true));
+        if is_def {
+            self.chain_starts.push(self.uses.len());
         }
-        if idx > self.end {
-            self.end = idx;
+        self.uses.push((idx, is_def));
+    }
+    /// returns the intersection (if one exists) of self and other
+    fn intersection(&self, other: &LiveRange) -> Option<(InstrIndex, InstrIndex)> {
+        // empty ranges do not intersect
+        if self.is_empty() || other.is_empty() { return None; }
+
+        // we have several cases for where self and other could be relative to each other:
+        // 1)                               2)
+        //    ┏━━self━━┓                                     ┏━━self━━┓
+        //             ^  ┗━━━other━━┛         ┗━━━other━━┛  ^
+        //             |  ^                               ^  |
+        //    right ---+  |                               |  +---- left
+        //                +--- left             right ----+
+        //
+        // 3)                               4)
+        //    ┏━━━━self━━━━┓                             ┏━━━━self━━━━┓
+        //           ┗━━━━━other━━━━┛          ┗━━━━━other━━━━┛
+        //           ^     ^                             ^    ^
+        //           |     |                             |    |
+        //   left ---+     +--- right            left ---+    +--- right
+        //
+        // 5)                               6)
+        //     ┏━━━━━━self━━━━━━━┓                      ┏━self━┓
+        //          ┗━other━┛                       ┗━━━━━other━━━━┛
+        //          ^       ^                           ^      ^
+        //          |       |                           |      |
+        //  left ---+       +--- right          left ---+      +--- right
+        //
+        // 7)                               8)
+        //    ┏━━━self━━━┓                                ┏━━━self━━━┓
+        //               ┗━━━━other━━━┛      ┗━━━━other━━━┛
+        //               ^                                ^
+        //               |                                |
+        //       left ---+--- right               left ---+--- right
+        //
+        // notice that if they intersect, left is less than right
+        // if there is no intersection, left is greater than right
+
+        let left = cmp::max(self.begin(), other.begin());
+        let right = cmp::min(self.end(), other.end());
+        match left.cmp(right) {
+            Ordering::Less => Some((*left, *right)), // an intersection exists
+            Ordering::Equal => {
+                //    notice that LiveRange::begin() must be a definition that does not depend on previous values
+                // (because there are no previous values to depend on)
+                // by definition, anything after LiveRange::end() does not access its value
+                //   therefore, we have if self.begin() == other.end() or other.begin() == self.end()
+                // there is NO intersection.
+                None
+            },
+            Ordering::Greater => None, // no intersection exists
         }
     }
-    fn intersects(&self, other: &LiveRange) -> bool {
-        let left = cmp::max(self.begin, other.begin);
-        let right = cmp::min(self.end, other.end);
-        left <= right
-    }
+    fn is_empty(&self) -> bool { self.uses.is_empty() }
+    fn begin(&self) -> &InstrIndex { self.uses.first().map(|(idx, _)| idx).unwrap() }
+    fn end(&self) -> &InstrIndex { self.uses.last().map(|(idx, _)| idx).unwrap() }
 }
 /// construct the set of live ranges across the entire program
-fn make_live_ranges(mir: &Mir) -> HashMap<VarblId, LiveRange> {
+fn make_live_ranges(mir: &Mir) -> LiveRangeMap {
     let mut intervals = HashMap::new();
     for (instr, idx) in mir.iter() {
-        instr.visit_variables(&mut |varbl, _| {
-            let interval = intervals.entry(*varbl).or_insert(LiveRange::new(idx, idx));
-            interval.expand(idx);
+        instr.visit_variables(&mut |varbl, is_def| {
+            let interval = intervals.entry(*varbl).or_insert(LiveRange::new());
+            interval.push(idx, is_def);
         })
     }
     intervals
@@ -91,16 +152,17 @@ fn make_live_ranges(mir: &Mir) -> HashMap<VarblId, LiveRange> {
 
 
 /// construct the interference graph from the set of intervals
-fn make_conflict_graph(intervals: &HashMap<VarblId, LiveRange>) -> ConflictGraph {
+fn make_conflict_graph(ranges: &HashMap<VarblId, LiveRange>) -> ConflictGraph {
     //TODO make constructing the graph faster
-    let nodes = intervals.len();
+    let nodes = ranges.len();
     let edges = util::estimate_edge_count(nodes);
     let mut graph = ConflictGraph::with_capacity(nodes, edges);
-    for (&varbl_a, interval_a) in intervals {
+    for (&varbl_a, range_a) in ranges {
         graph.add_node(varbl_a);
-        for (&varbl_b, interval_b) in intervals {
-            if varbl_a != varbl_b && interval_a.intersects(interval_b) {
-                graph.add_edge(varbl_a, varbl_b, ());
+        for (&varbl_b, range_b) in ranges {
+            if varbl_a == varbl_b { continue; }
+            if let Some(intersect) = range_a.intersection(range_b) {
+                graph.add_edge(varbl_a, varbl_b, intersect);
             }
         }
     }
@@ -108,10 +170,14 @@ fn make_conflict_graph(intervals: &HashMap<VarblId, LiveRange>) -> ConflictGraph
 }
 
 
+struct RemovedNode {
+    node: VarblId,
+    neighbors: Vec<VarblId>,
+}
 
 /// removes a node with a degree strictly less than `n` from `conflict_graph`,
 /// returning a tuple containing the node and it's neighbors
-fn remove_node_with_lesser_degree(conflict_graph: &mut ConflictGraph, n: usize) -> Option<(VarblId, Vec<VarblId>)> {
+fn remove_node_with_lesser_degree(conflict_graph: &mut ConflictGraph, n: usize) -> Option<RemovedNode> {
     // scan for the first node that with degree < n
     for node in conflict_graph.nodes() {
         let degree = conflict_graph.neighbors(node).count();
@@ -119,15 +185,22 @@ fn remove_node_with_lesser_degree(conflict_graph: &mut ConflictGraph, n: usize) 
         // the degree is less than n, so we remove it and pop it onto the stack
         let neighbors = conflict_graph.neighbors(node).collect::<Vec<_>>();
         conflict_graph.remove_node(node);
-        return Some( (node, neighbors) );
+        return Some(RemovedNode{node, neighbors});
     }
     None
 }
 
-/// add `node` to the graph, and connect it to everything in `neighbors`, creating them as needed
-fn recreate_node(conflict_graph: &mut ConflictGraph, node: VarblId, neighbors: Vec<VarblId>) {
+/// recreate the removed node in the conflict graph,
+/// adding the edges (where it still needs them) to its previous neighbors
+/// we assume that no new edges were created
+fn recreate_node(conflict_graph: &mut ConflictGraph, ranges: &LiveRangeMap, removed_node: RemovedNode) {
+    let RemovedNode{node, neighbors} = removed_node;
     for neighbor in neighbors.into_iter() {
-        conflict_graph.add_edge(node, neighbor, ());
+        if let Some(intersect) = ranges[&node].intersection(&ranges[&neighbor]) {
+            conflict_graph.add_edge(node, neighbor, intersect);
+        } else {
+            // work has been done and these variables no longer overlap
+        }
     }
 }
 
@@ -172,7 +245,7 @@ fn assign_color(colors: &mut Coloring, conflict_graph: &ConflictGraph, node: Var
 pub fn allocate_registers(mir: &Mir, _symbols: &SymbolTable) -> RegisterAllocation {
     // generate live ranges and the conflict graph
     let ranges = make_live_ranges(mir);
-    let mut conflict_graph = make_conflict_graph(&intervals);
+    let mut conflict_graph = make_conflict_graph(&ranges);
     println!("conflict graph: {:?}", Dot::with_config(
         &conflict_graph, &[Config::EdgeNoLabel]
     ));
@@ -211,8 +284,12 @@ pub fn allocate_registers(mir: &Mir, _symbols: &SymbolTable) -> RegisterAllocati
 
 
     // reconstruct the graph and apply colors
-    while let Some((node, neighbors)) = colorable.pop() {
-        recreate_node(&mut conflict_graph, node, neighbors);
+    while let Some(removed_node) = colorable.pop() {
+        let node = removed_node.node;
+        // first, we put the node back into the graph
+        recreate_node(&mut conflict_graph, &ranges, removed_node);
+        // now that we have it back in the graph, we can give it a color
+        // using a greedy coloring (i.e, next non conflicting color)
         assign_color(&mut colors, &conflict_graph, node);
     }
 
