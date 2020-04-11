@@ -53,13 +53,14 @@ impl std::fmt::Display for RegisterAllocation {
 ///       instructions which is already
 ///       established.
 #[derive(Debug)]
-struct Interval {
+struct LiveRange {
+
     begin: InstrIndex,
     end: InstrIndex,
 }
-impl Interval {
-    fn new(begin: InstrIndex, end: InstrIndex) -> Interval {
-        Interval { begin, end }
+impl LiveRange {
+    fn new(begin: InstrIndex, end: InstrIndex) -> LiveRange {
+        LiveRange { begin, end }
     }
     fn expand(&mut self, idx: InstrIndex) {
         if idx < self.begin {
@@ -69,18 +70,18 @@ impl Interval {
             self.end = idx;
         }
     }
-    fn intersects(&self, other: &Interval) -> bool {
+    fn intersects(&self, other: &LiveRange) -> bool {
         let left = cmp::max(self.begin, other.begin);
         let right = cmp::min(self.end, other.end);
         left <= right
     }
 }
-/// construct the set of intervals across the entire program
-fn make_intervals(mir: &Mir) -> HashMap<VarblId, Interval> {
+/// construct the set of live ranges across the entire program
+fn make_live_ranges(mir: &Mir) -> HashMap<VarblId, LiveRange> {
     let mut intervals = HashMap::new();
     for (instr, idx) in mir.iter() {
         instr.visit_variables(&mut |varbl, _| {
-            let interval = intervals.entry(*varbl).or_insert(Interval::new(idx, idx));
+            let interval = intervals.entry(*varbl).or_insert(LiveRange::new(idx, idx));
             interval.expand(idx);
         })
     }
@@ -90,7 +91,7 @@ fn make_intervals(mir: &Mir) -> HashMap<VarblId, Interval> {
 
 
 /// construct the interference graph from the set of intervals
-fn make_conflict_graph(intervals: &HashMap<VarblId, Interval>) -> ConflictGraph {
+fn make_conflict_graph(intervals: &HashMap<VarblId, LiveRange>) -> ConflictGraph {
     //TODO make constructing the graph faster
     let nodes = intervals.len();
     let edges = util::estimate_edge_count(nodes);
@@ -132,7 +133,7 @@ fn recreate_node(conflict_graph: &mut ConflictGraph, node: VarblId, neighbors: V
 
 /// The heuristic for the cost it would take to spill the given variable
 /// Uses the cost of spilling / degree of node
-fn spill_cost(varbl: VarblId, _live_range: &Interval, conflict_graph: &ConflictGraph, _mir: &Mir) -> f32 {
+fn spill_cost(varbl: VarblId, _live_range: &LiveRange, conflict_graph: &ConflictGraph, _mir: &Mir) -> f32 {
     let degree = conflict_graph.neighbors(varbl).count();
 
     let cost = 0;
@@ -146,7 +147,7 @@ fn spill_cost(varbl: VarblId, _live_range: &Interval, conflict_graph: &ConflictG
 fn assign_color(colors: &mut Coloring, conflict_graph: &ConflictGraph, node: VarblId) {
     if colors.contains_key(&node) {
         // we have already colored this node.
-        // no reason to give it a new color
+        // no reason to give it a new color 
         return
     }
     // find all of our neighbors colors (if they have one)
@@ -170,7 +171,7 @@ fn assign_color(colors: &mut Coloring, conflict_graph: &ConflictGraph, node: Var
 /// the algorithm is basically Chaitin's algorithm
 pub fn allocate_registers(mir: &Mir, _symbols: &SymbolTable) -> RegisterAllocation {
     // generate live ranges and the conflict graph
-    let intervals = make_intervals(mir);
+    let ranges = make_live_ranges(mir);
     let mut conflict_graph = make_conflict_graph(&intervals);
     println!("conflict graph: {:?}", Dot::with_config(
         &conflict_graph, &[Config::EdgeNoLabel]
@@ -193,7 +194,7 @@ pub fn allocate_registers(mir: &Mir, _symbols: &SymbolTable) -> RegisterAllocati
 
     for varbl in conflict_graph.nodes() {
 
-        let cost = spill_cost(varbl, &intervals[&varbl], &conflict_graph, mir);
+        let cost = spill_cost(varbl, &ranges[&varbl], &conflict_graph, mir);
 
         match spill_var {
             None => {
