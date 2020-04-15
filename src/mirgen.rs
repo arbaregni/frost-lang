@@ -1,4 +1,5 @@
 use crate::ast::{Ast, AstKind, AstBlock};
+use crate::mir;
 use crate::mir::{Instr, Val, MirGraph, MirBlock, EdgeInfo, Mir, VarblId, ExitStrategy};
 use crate::symbols::{SymbolTable, SymbolId};
 use petgraph::graph::NodeIndex;
@@ -6,24 +7,22 @@ use crate::scope::ScopeId;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use crate::functions::SubroutineInfo;
-use crate::codegen::{Coloring, Color};
-use crate::{codegen, mir};
+
 
 struct Context {
     varbl_counter: u32, // a counter for generating variable id's
     varbl_table: HashMap<SymbolId, VarblId>, // maps identifiers to their corresponding varbl id's
-    precoloring: Coloring,   // some values need to be in certain registers
 }
 impl Context {
     pub fn new() -> Context {
         let mut this = Context {
             varbl_counter: 1, // return address is V0
             varbl_table: HashMap::new(),
-            precoloring: Coloring::new(),
         };
-        this.precolor(mir::RETURN_ADDR_VARBL, codegen::RETURN_ADDR_COLOR);
         this
     }
+    /// get the total number of dispatched values
+    pub fn total(&self) -> u32 { self.varbl_counter }
     /// get the mir value associated with an identifier in the specified scope
     pub fn rename(&mut self, name: &str, scope_id: ScopeId, symbols: &SymbolTable) -> VarblId {
         let id = symbols.scope_table.get_id(name, scope_id).expect(&f!("unbound symbol {name} in scope {scope_id}")).clone();
@@ -42,10 +41,6 @@ impl Context {
         let varbl = VarblId(self.varbl_counter);
         self.varbl_counter += 1;
         varbl
-    }
-    /// color a value to a specific register
-    pub fn precolor(&mut self, varbl: VarblId, color: Color) {
-        self.precoloring.insert(varbl, color);
     }
 }
 
@@ -68,7 +63,6 @@ impl Ast {
             AstKind::IfStmnt{ref test, ref if_branch, ref else_branch} => {
                 // calculate the condition first
                 let condition = test.generate_instr(mir_graph, curr_block, ctx, symbols);
-
                 // create the starting blocks of the branches
                 let mut if_block = MirBlock::create_block_at_same_depth(mir_graph, curr_block);
                 mir_graph[if_block].add_tag("if branch");
@@ -201,13 +195,12 @@ fn find_or_create_subroutine<'a>(mir_graph: &mut MirGraph, symbol_id: &SymbolId,
     let start = MirBlock::create_block(mir_graph, 0);
     // add some debugging information to the mir block
     mir_graph[start].add_tag(&format!("subroutine {:?}", symbol_id));
-
     // create the dummy ending block for this routine
     let end = MirBlock::create_block_at_same_depth(mir_graph, &start);
     // extract the mir values for our parameters
     let args = fun_dec.params.iter().map(|param| {
         ctx.rename(param, fun_dec.scope_id(), symbols)
-    }).collect::<Vec<VarblId>>();
+    }).collect::<Vec<_>>();
     // create our return value
     let dest = ctx.make_intermediate();
     // set the mir now. this is so self referential (i.e. recursive) functions can use this information
@@ -238,5 +231,5 @@ pub fn create_mir(ast_nodes: &[Ast], symbols: &SymbolTable) -> Mir {
     }
     // the program returns to it's caller at the end of the main function
     graph[exit_block].set_exit_strategy(ExitStrategy::Ret);
-    Mir::from(graph, ctx.precoloring, entry_block, exit_block)
+    Mir::from(graph, entry_block, exit_block, ctx.total())
 }

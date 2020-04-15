@@ -1,4 +1,5 @@
-use crate::mir::{Mir, VarblId};
+use crate::mir;
+use crate::mir::{Mir, VarblId, MirBlock};
 use crate::symbols::SymbolTable;
 use crate::util;
 use std::collections::HashMap;
@@ -15,33 +16,65 @@ const MIPS_NUM_REGISTERS: usize = 24;
 const MIPS_NUM_FEASIBLE_REGISTERS: usize = 16;
 const MIPS_REGISTERS: [&'static str; MIPS_NUM_REGISTERS]
     = [
-       "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6", "$t7",  // <━━┓ free to color however we like
-       "$s0", "$s1", "$s2", "$s3", "$s4", "$s5", "$s6", "$s7",  // <━━┛
+       "$t0", "$t1", "$t2", "$t3", "$t4", "$t5", "$t6", "$t7",  // ━━┓
+                                                                //   ┣━━ free to color however we like
+       "$s0", "$s1", "$s2", "$s3", "$s4", "$s5", "$s6", "$s7",  // ━━┛
 
        "$a0", "$a1", "$a2", "$a3", "$v0", "$v1", "$ra", "$sp"]; // <--------------- the last 8 have special semantics
 //                                                  ^
 //                                                  |
 //                                                index 22
 
-pub type Color = u8;
-pub type Coloring = HashMap<VarblId, Color>;
-
-type InstrSpan = (InstrIndex, InstrIndex);
-type ConflictGraph = GraphMap<VarblId, InstrSpan, Undirected>;
-
-type LiveRangeMap = HashMap<VarblId, LiveRange>;
+/// indexes into the MIPS_REGISTERS table
+type Color = u8;
 
 // the index into MIPS_REGISTERS keeps register "$ra" at index 22
-pub const RETURN_ADDR_COLOR: Color = 22;
+const RETURN_ADDR_COLOR: Color = 22;
 
 pub struct RegisterAllocation {
-    colors: Coloring
+    varbl_counter: u32,
+    colors: HashMap<VarblId, Color>,
 }
 impl RegisterAllocation {
+    fn new(varbl_total: u32) -> RegisterAllocation {
+        // eventually, each VarblId will have a color, so we should allocate enough for all of them
+        let mut colors = HashMap::with_capacity(varbl_total as usize);
+        // there are a few values which must be placed in certain registers
+        colors.insert(mir::RETURN_ADDR_VARBL, RETURN_ADDR_COLOR);
+        RegisterAllocation { colors, varbl_counter: varbl_total }
+    }
     pub fn get(&self, varbl: &VarblId) -> &'static str {
         let color = *self.colors.get(varbl)
             .expect(&f!("unassigned memory location for variable {varbl}"));
         MIPS_REGISTERS[color as usize]
+    }
+    /// Assign a register to `node` in by assigning it the smallest color
+    /// which does not conflict with any neighbors of it in `conflict_graph`
+    fn assign_register_greedy(&mut self, conflict_graph: &ConflictGraph, node: VarblId) {
+        if self.colors.contains_key(&node) {
+            // we have already colored this node.
+            // no reason to give it a new color
+            return
+        }
+        // find all of our neighbors colors (if they have one)
+        let mut neighbor_colors = conflict_graph.neighbors(node)
+            .filter_map(|varbl| self.colors.get(&varbl))
+            .map(|c| *c)
+            .collect::<Vec<_>>();
+        neighbor_colors.sort_unstable();
+
+        // pick as our color the smallest color that does not conflict
+        let mut color = 0;
+        for c in neighbor_colors.into_iter() {
+            if color == c {
+                color += 1;
+            } else if color < c {
+                // because neighbor_colors is sorted, if color is less than c,
+                // it is smaller than all subsequent neighbors, so we can stop searching now
+                break;
+            }
+        }
+        self.colors.insert(node, color);
     }
 }
 impl std::fmt::Display for RegisterAllocation {
@@ -64,6 +97,10 @@ pub struct InstrIndex {
 impl InstrIndex {
     pub fn from(block_pos: usize, idx_in_block: usize) -> InstrIndex {
         InstrIndex { block_pos, idx_in_block }
+    }
+    pub fn containing_block(self, mir: &Mir) -> &MirBlock {
+        let node_idx = mir.ordering[self.block_pos];
+        &mir.graph[node_idx]
     }
 }
 impl std::cmp::Ord for InstrIndex {
@@ -148,8 +185,8 @@ impl LiveRange {
 
         let left = cmp::max(self.begin(), other.begin());
         let right = cmp::min(self.end(), other.end());
-        match left.cmp(right) {
-            Ordering::Less => Some((*left, *right)), // an intersection exists
+        match left.cmp(&right) {
+            Ordering::Less => Some((left, right)), // an intersection exists
             Ordering::Equal => {
                 //    notice that LiveRange::begin() must be a definition that does not depend on previous values
                 // (because there are no previous values to depend on)
@@ -162,9 +199,14 @@ impl LiveRange {
         }
     }
     fn is_empty(&self) -> bool { self.uses.is_empty() }
-    fn begin(&self) -> &InstrIndex { self.uses.first().map(|(idx, _)| idx).unwrap() }
-    fn end(&self) -> &InstrIndex { self.uses.last().map(|(idx, _)| idx).unwrap() }
+    fn begin(&self) -> InstrIndex { self.uses.first().map(|(idx, _)| *idx).unwrap() }
+    fn end(&self) -> InstrIndex { self.uses.last().map(|(idx, _)| *idx).unwrap() }
+    fn iter(&self) -> impl Iterator<Item = &(InstrIndex, bool)> { self.uses.iter() }
 }
+
+type InstrSpan = (InstrIndex, InstrIndex);
+type ConflictGraph = GraphMap<VarblId, InstrSpan, Undirected>;
+type LiveRangeMap = HashMap<VarblId, LiveRange>;
 
 
 /// construct the set of live ranges across the entire program
@@ -246,41 +288,23 @@ fn recreate_node(conflict_graph: &mut ConflictGraph, ranges: &LiveRangeMap, remo
     }
 }
 
+const ESTIMATED_LOOP_REPS: u32 = 10;
+
 /// The heuristic for the cost it would take to spill the given variable
 /// Uses the cost of spilling / degree of node
-fn spill_cost(varbl: VarblId, _live_range: &LiveRange, conflict_graph: &ConflictGraph, _mir: &Mir) -> f32 {
+fn spill_cost(varbl: VarblId, live_range: &LiveRange, conflict_graph: &ConflictGraph, mir: &Mir) -> f32 {
     let degree = conflict_graph.neighbors(varbl).count();
 
-    let cost = 0;
-
+    let mut cost = 0;
+    for (instr_index, _) in live_range.iter() {
+        let depth = instr_index.containing_block(mir).depth();
+        cost += ESTIMATED_LOOP_REPS.pow(depth);
+    }
 
 
     cost as f32 / degree as f32
 }
 
-/// Assign a color to `node_idx` by assigning it the smallest color possible
-fn assign_color(colors: &mut Coloring, conflict_graph: &ConflictGraph, node: VarblId) {
-    if colors.contains_key(&node) {
-        // we have already colored this node.
-        // no reason to give it a new color 
-        return
-    }
-    // find all of our neighbors colors (if they have one)
-    let mut neighbor_colors = conflict_graph.neighbors(node)
-        .filter_map(|n| colors.get(&n))
-        .map(|c| *c)
-        .collect::<Vec<_>>();
-    neighbor_colors.sort_unstable();
-
-    // pick as our color the smallest color that does not conflict
-    let mut color = 0;
-    for c in neighbor_colors.into_iter() {
-        if color == c {
-            color += 1;
-        }
-    }
-    colors.insert(node, color);
-}
 
 /// allocate registers for based on our internal representation
 /// the algorithm is basically Chaitin's algorithm
@@ -292,8 +316,11 @@ pub fn allocate_registers(mir: &Mir, _symbols: &SymbolTable) -> RegisterAllocati
         &conflict_graph, &[Config::EdgeNoLabel]
     ));
 
+    let mut regalloc = RegisterAllocation::new(mir.varbl_total());
+
     // start to color the conflict graph
-    let mut colors = mir.precoloring.clone();
+    // the colors are held in the regalloc struct
+
     let n = MIPS_NUM_FEASIBLE_REGISTERS;
     let mut colorable = Vec::new(); // for the nodes with degree less than n
     while let Some(value) = remove_node_with_lesser_degree(&mut conflict_graph, n) {
@@ -302,38 +329,39 @@ pub fn allocate_registers(mir: &Mir, _symbols: &SymbolTable) -> RegisterAllocati
     println!("after trimming: {:?}", Dot::with_config(
         &conflict_graph, &[Config::EdgeNoLabel]
     ));
+
     // now we figure out if we have to spill any nodes
     // if so, we may have to redo the coloring
-
     let mut spill_var = None;
-
     for varbl in conflict_graph.nodes() {
-
         let cost = spill_cost(varbl, &ranges[&varbl], &conflict_graph, mir);
-
         match spill_var {
             None => {
+                // on the first iteration, set the spill var and its corresponding cost
                 spill_var = Some((varbl, cost));
             }
             Some((_, prev_min_cost)) if cost < prev_min_cost => {
+                // on later iterations, compare it to previous costs
                 spill_var = Some((varbl, cost));
             }
             _ => { /* nothing to do */ }
         }
-
     }
-    assert!(spill_var.is_none()); // for now: no deciding to spill in order to split a live range
+    println!("decision: spilling {:?}", spill_var);
 
-
-    // reconstruct the graph and apply colors
-    while let Some(removed_node) = colorable.pop() {
-        let node = removed_node.node;
-        // first, we put the node back into the graph
-        recreate_node(&mut conflict_graph, &ranges, removed_node);
-        // now that we have it back in the graph, we can give it a color
-        // using a greedy coloring (i.e, next non conflicting color)
-        assign_color(&mut colors, &conflict_graph, node);
+    if let Some((varbl, _)) = spill_var {
+        unimplemented!("spilling variable {}", varbl);
+    } else {
+        // reconstruct the graph and apply colors
+        while let Some(removed_node) = colorable.pop() {
+            let node = removed_node.node;
+            // first, we put the node back into the graph
+            recreate_node(&mut conflict_graph, &ranges, removed_node);
+            // now that we have it back in the graph, we can give it a color
+            regalloc.assign_register_greedy(&conflict_graph, node);
+        }
+        return regalloc
     }
 
-    RegisterAllocation { colors }
+    regalloc
 }

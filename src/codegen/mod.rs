@@ -37,10 +37,6 @@ impl MipsProgram {
             label_maker: LabelMaker::new(),
         }
     }
-    fn pre_process(&mut self, _mir: &Mir, _symbols: &SymbolTable) {
-        // prepare for the main function
-        self.text.push_str("    .text\n    .globl main\n");
-    }
     fn compile_instr(&mut self, instr: &Instr) {
         use Instr::*;
         use Val::*;
@@ -119,7 +115,7 @@ impl MipsProgram {
             }
             Print(val) => {
                 // assume that val is an integer for now
-                make_instr!(self, "li", "$v0", 1 ; "prepare for syscall 1");
+                make_instr!(self, "li", "$v0", 1 ; "prepare for syscall 1 (print_int)");
                 set_reg!(self, "$a0", val        ; "load argument");
                 make_instr!(self, "syscall");
             }
@@ -128,9 +124,9 @@ impl MipsProgram {
                 make_instr!(self, "addi", "$sp", -WORD_SIZE  ; format!("push {} onto the stack", varbl) );
                 make_instr!(self, "sw", r, 0, ( "$sp" ));
             }
-            Pop(varbl) => {
-                let r = get_reg!(self, varbl);
-                make_instr!(self, "lw", r, 0, ( "$sp" )     ; format!("pop {} off the stack", varbl));
+            Pop(dest) => {
+                let rd = get_reg!(self, dest);
+                make_instr!(self, "lw", rd, 0, ( "$sp" )     ; format!("pop {} off the stack", dest));
                 make_instr!(self, "addi", "$sp", WORD_SIZE);
             }
         }
@@ -160,8 +156,8 @@ impl MipsProgram {
                     Val::Varbl(v) => {
                         // v can take on anything: we must branch
                         let zero_label = mir.graph[on_zero].label(&mut self.label_maker);
-                        let loc = self.reg_alloc.get(&v);
-                        make_instr!(self, "beq", loc, "$zero", zero_label);
+                        let rd = get_reg!(self, &v);
+                        make_instr!(self, "beq", rd, "$zero", zero_label);
                         // at this point, we are on the non_zero path (if it was zero, we would have transferred control)
                         next_block = on_nonzero;
                     },
@@ -196,7 +192,8 @@ pub fn generate_mips(mir: &Mir, symbols: &SymbolTable) -> String
     let reg_alloc = regalloc::allocate_registers(mir, symbols);
     println!("{}", reg_alloc);
     let mut prgm = MipsProgram::new(reg_alloc);
-    prgm.pre_process(mir, symbols);
+    // prepare for the main function
+    prgm.text.push_str("    .text\n    .globl main\n");
     for block in mir.blocks() {
         // print the label
         let lbl = block.label(&mut prgm.label_maker);

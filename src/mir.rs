@@ -3,7 +3,7 @@ use petgraph::{Directed, Direction};
 use std::fmt::{Formatter, Error};
 use std::collections::{HashSet, HashMap};
 use once_cell::unsync::OnceCell;
-use crate::codegen::{LabelMaker, Coloring};
+use crate::codegen::LabelMaker;
 use petgraph::visit::EdgeRef;
 
 /// the id to keep track of variables in mir code
@@ -145,12 +145,12 @@ impl ExitStrategy {
 pub struct MirBlock {
     debug_tag: String, // useful information on where this block comes from
     maybe_label: OnceCell<String>,
-    depth: usize, // the nexting depth of this block
+    depth: u32, // the nesting depth of this block
     instrs: Vec<Instr>,
     exit_strategy: ExitStrategy,
 }
 impl MirBlock {
-    pub fn with_depth(depth: usize) -> MirBlock {
+    pub fn with_depth(depth: u32) -> MirBlock {
         MirBlock {
             debug_tag: String::new(),
             maybe_label: OnceCell::new(),
@@ -159,7 +159,7 @@ impl MirBlock {
             exit_strategy: ExitStrategy::Undefined
         }
     }
-    pub fn create_block(mir_graph: &mut MirGraph, depth: usize) -> NodeIndex {
+    pub fn create_block(mir_graph: &mut MirGraph, depth: u32) -> NodeIndex {
         let block = MirBlock::with_depth(depth);
         mir_graph.add_node(block)
     }
@@ -207,7 +207,7 @@ impl MirBlock {
     }
     /// return a clone of our exit strategy
     pub fn exit_strategy(&self) -> ExitStrategy { self.exit_strategy.clone() }
-
+    pub fn depth(&self) -> u32 { self.depth }
     pub fn push(&mut self, instr: Instr) { self.instrs.push(instr); }
     pub fn iter(&self) -> impl Iterator<Item = &Instr> { self.instrs.iter() }
     pub fn get(&self, idx: usize) -> Option<&Instr> { self.instrs.get(idx) }
@@ -228,17 +228,17 @@ impl std::fmt::Display for MirBlock {
 #[derive(Debug)]
 pub struct Mir {
     pub graph: MirGraph,         // the call flow graph
-    pub precoloring: Coloring,    // values whose registers are already decided
     pub entry_block: NodeIndex, // the entry block of the program
     pub exit_block: NodeIndex, // the exit block of the program
+    varbl_total: u32,
     pub ordering: Vec<NodeIndex>,
 }
 impl Mir {
     /// Construct a Mir object from the graph
     /// Performs some analysis on the graph, such as (TODO: reducing) and sorting
-    pub fn from(graph: MirGraph, precoloring: Coloring, entry_block: NodeIndex, exit_block: NodeIndex) -> Mir {
+    pub fn from(graph: MirGraph, entry_block: NodeIndex, exit_block: NodeIndex, varbl_total: u32) -> Mir {
         let mut this = Mir {
-            graph, precoloring, entry_block, exit_block, ordering: Vec::new(),
+            graph, entry_block, exit_block, varbl_total, ordering: Vec::new(),
         };
         //TODO: simplify the graph
         this.set_nesting_depths();
@@ -303,6 +303,7 @@ impl Mir {
     pub fn blocks(&self) -> MirBlocks {
         MirBlocks { mir: self, idx: 0 }
     }
+    pub fn varbl_total(&self) -> u32 { self.varbl_total }
 }
 
 pub struct MirBlocks<'a> {
